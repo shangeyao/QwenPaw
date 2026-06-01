@@ -598,12 +598,13 @@ QwenPaw supports optional web login authentication to protect the Console from u
 1. **Enable authentication** — Set `QWENPAW_AUTH_ENABLED=true` and start QwenPaw
 2. **Registration flow**:
    - On first visit, the Console shows a **registration page**
-   - Create the single admin account (username + password)
-   - System uses single-user mode, designed for personal use
+   - Create the administrator account (username + password)
+   - The administrator can manage all agents and create optional per-agent login accounts
 3. **Login flow**:
    - After registration, subsequent visits show the **login page**
    - After entering credentials, a signed token is generated (valid for 7 days)
    - Token is stored in browser localStorage and automatically attached to all API requests
+   - Per-agent accounts automatically enter their assigned agent and cannot operate other agents
 4. **Auto-registration** (optional):
    - Set `QWENPAW_AUTH_USERNAME` and `QWENPAW_AUTH_PASSWORD` environment variables
    - QwenPaw automatically creates the admin account on startup, skipping web registration
@@ -612,10 +613,30 @@ QwenPaw supports optional web login authentication to protect the Console from u
 
 **Security features**:
 
-- Password stored as salted SHA-256 hash, no plaintext stored
+- Admin and agent-scoped passwords are stored as salted SHA-256 hashes, no plaintext stored
 - HMAC-SHA256 signed tokens with 7-day auto-expiry
+- Agent-scoped tokens carry the assigned `agent_id` and are rejected when accessing other agents
 - Uses only Python standard library (`hashlib`, `hmac`, `secrets`), no external dependencies
 - `auth.json` file protected with `0o600` permissions (owner read/write only)
+
+### Agent-scoped accounts
+
+Administrators can create a separate web login for each agent. After an agent account logs in, the Console selects that agent automatically and only exposes operations for that agent.
+
+To configure an agent account:
+
+1. Log in with the administrator account
+2. Open **Settings -> Agents**
+3. Create or edit an agent
+4. Fill in **Web Login Username** and **Web Login Password**
+5. Save the agent, then use those credentials on the login page
+
+| Account type  | Scope                                  | Typical actions                                  |
+| ------------- | -------------------------------------- | ------------------------------------------------ |
+| Administrator | All agents and global Console settings | Create, delete, reorder, enable, and edit agents |
+| Agent account | Only the assigned agent                | Use chat/tasks and update that agent's settings  |
+
+Agent passwords are write-only in the Console: the stored hash is never shown again. Updating the password replaces the saved hash and future logins must use the new password. Agent accounts are managed in the agent settings UI, not through environment variables.
 
 ### Environment variables
 
@@ -651,7 +672,8 @@ This can also be managed from the Console under **Settings → Security**.
 - `QWENPAW_AUTH_USERNAME` and `QWENPAW_AUTH_PASSWORD` are used together:
   - Both set → Auto-creates admin account on startup (for automated deployments)
   - Not set or only one set → Register via web UI on first visit (interactive deployments)
-- If a user is already registered, auto-registration environment variables are ignored
+- These variables only create the administrator account; per-agent accounts are configured in **Settings → Agents**
+- If an admin user is already registered, auto-registration environment variables are ignored
 
 ### Enable authentication
 
