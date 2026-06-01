@@ -7,12 +7,14 @@ import { LockOutlined, UserOutlined } from "@ant-design/icons";
 import { authApi } from "../../api/modules/auth";
 import { setAuthToken } from "../../api/config";
 import { useTheme } from "../../contexts/ThemeContext";
+import { useAgentStore } from "../../stores/agentStore";
 
 export default function LoginPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { isDark } = useTheme();
+  const { setSelectedAgent } = useAgentStore();
   const [loading, setLoading] = useState(false);
   const [isRegister, setIsRegister] = useState(false);
   const [hasUsers, setHasUsers] = useState(true);
@@ -45,14 +47,24 @@ export default function LoginPage() {
         const res = await authApi.register(values.username, values.password);
         if (res.token) {
           setAuthToken(res.token);
+          const target =
+            res.role === "agent" && res.agent_id ? "/chat" : redirect;
+          if (res.role === "agent" && res.agent_id) {
+            setSelectedAgent(res.agent_id);
+          }
           message.success(t("login.registerSuccess"));
-          navigate(redirect, { replace: true });
+          navigate(target, { replace: true });
         }
       } else {
         const res = await authApi.login(values.username, values.password);
         if (res.token) {
           setAuthToken(res.token);
-          navigate(redirect, { replace: true });
+          const target =
+            res.role === "agent" && res.agent_id ? "/chat" : redirect;
+          if (res.role === "agent" && res.agent_id) {
+            setSelectedAgent(res.agent_id);
+          }
+          navigate(target, { replace: true });
         } else {
           message.info(t("login.authNotEnabled"));
           navigate(redirect, { replace: true });

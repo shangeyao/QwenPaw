@@ -1130,6 +1130,17 @@ class AgentProfileConfig(BaseModel):
         default=None,
         description="Active model for this agent (provider_id + model)",
     )
+    auth_username: Optional[str] = Field(
+        default=None,
+        description=(
+            "Web console username for this agent. Password is write-only "
+            "and is stored in secret auth data, not agent.json."
+        ),
+    )
+    auth_password: Optional[str] = Field(
+        default=None,
+        description="Write-only web console password for this agent.",
+    )
     language: str = Field(
         default="zh",
         description="Language setting for this agent",

@@ -222,6 +222,30 @@ export function AgentModal({
             rows={3}
           />
         </Form.Item>
+        <Form.Item
+          name="auth_username"
+          label={t("agent.authUsername")}
+          help={t("agent.authUsernameHelp")}
+        >
+          <Input placeholder={t("agent.authUsernamePlaceholder")} />
+        </Form.Item>
+        <Form.Item
+          name="auth_password"
+          label={t("agent.authPassword")}
+          help={
+            editingAgent
+              ? t("agent.authPasswordEditHelp")
+              : t("agent.authPasswordCreateHelp")
+          }
+        >
+          <Input.Password
+            placeholder={
+              editingAgent
+                ? t("agent.authPasswordEditPlaceholder")
+                : t("agent.authPasswordCreatePlaceholder")
+            }
+          />
+        </Form.Item>
         <Form.Item label={t("agent.model")} help={t("agent.modelHelp")}>
           <Space.Compact style={{ width: "100%" }}>
             <Select

@@ -15,6 +15,7 @@ from ..auth import (
     revoke_token,
     update_credentials,
     verify_token,
+    verify_token_principal,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -31,6 +32,8 @@ class LoginRequest(BaseModel):
 class LoginResponse(BaseModel):
     token: str
     username: str
+    role: str = "admin"
+    agent_id: str | None = None
 
 
 class RegisterRequest(BaseModel):
@@ -62,7 +65,13 @@ async def login(req: LoginRequest):
     if token is None:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    return LoginResponse(token=token, username=req.username)
+    principal = verify_token_principal(token)
+    return LoginResponse(
+        token=token,
+        username=req.username,
+        role=principal.get("role", "admin") if principal else "admin",
+        agent_id=principal.get("agent_id") if principal else None,
+    )
 
 
 @router.post("/register")
@@ -130,7 +139,13 @@ async def verify(request: Request):
             detail="Invalid or expired token",
         )
 
-    return {"valid": True, "username": username}
+    principal = verify_token_principal(token)
+    return {
+        "valid": True,
+        "username": username,
+        "role": principal.get("role", "admin") if principal else "admin",
+        "agent_id": principal.get("agent_id") if principal else None,
+    }
 
 
 class UpdateProfileRequest(BaseModel):
@@ -160,8 +175,14 @@ async def update_profile(req: UpdateProfileRequest, request: Request):
     # Verify caller is authenticated
     auth_header = request.headers.get("Authorization", "")
     caller_token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
-    if not caller_token or verify_token(caller_token) is None:
+    principal = verify_token_principal(caller_token) if caller_token else None
+    if principal is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    if principal.get("role") == "agent":
+        raise HTTPException(
+            status_code=403,
+            detail="Agent accounts cannot update the admin profile",
+        )
 
     if not req.new_username and not req.new_password:
         raise HTTPException(

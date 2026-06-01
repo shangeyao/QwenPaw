@@ -9,6 +9,8 @@ export interface AgentSummary {
   workspace_dir: string;
   enabled: boolean;
   active_model?: ModelSlotConfig | null;
+  auth_username?: string | null;
+  has_auth_account?: boolean;
 }
 
 export interface AgentListResponse {
@@ -27,6 +29,8 @@ export interface AgentProfileConfig {
   workspace_dir?: string;
   approval_level?: string;
   active_model?: ModelSlotConfig | null;
+  auth_username?: string | null;
+  auth_password?: string | null;
   channels?: unknown;
   mcp?: unknown;
   heartbeat?: unknown;
@@ -45,6 +49,8 @@ export interface CreateAgentRequest {
   language?: string;
   skill_names?: string[];
   active_model?: ModelSlotConfig | null;
+  auth_username?: string | null;
+  auth_password?: string | null;
 }
 
 export interface AgentProfileRef {

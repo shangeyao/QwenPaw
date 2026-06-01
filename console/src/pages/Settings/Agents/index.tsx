@@ -48,6 +48,7 @@ export default function AgentsPage() {
       setEditingAgent(agent);
       form.setFieldsValue({
         ...config,
+        auth_password: undefined,
         active_model_provider: config.active_model?.provider_id || undefined,
         active_model_model: config.active_model?.model || undefined,
       });
@@ -100,13 +101,27 @@ export default function AgentsPage() {
 
       const providerId = values.active_model_provider;
       const modelId = values.active_model_model;
+      const auth_username =
+        typeof values.auth_username === "string"
+          ? values.auth_username.trim() || undefined
+          : values.auth_username;
+      const auth_password =
+        typeof values.auth_password === "string"
+          ? values.auth_password.trim() || undefined
+          : values.auth_password;
       const active_model =
         providerId && modelId
           ? { provider_id: providerId, model: modelId }
           : null;
 
       const { active_model_provider, active_model_model, ...rest } = values;
-      const payload = { ...rest, workspace_dir, active_model };
+      const payload = {
+        ...rest,
+        workspace_dir,
+        active_model,
+        auth_username,
+        auth_password,
+      };
 
       if (editingAgent) {
         const previousInstalledSkills = installedSkillsRef.current;

@@ -3,6 +3,8 @@ import { getApiUrl } from "../config";
 export interface LoginResponse {
   token: string;
   username: string;
+  role?: "admin" | "agent";
+  agent_id?: string | null;
   message?: string;
 }
 

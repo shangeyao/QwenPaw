@@ -17,6 +17,11 @@ from agentscope_runtime.engine.schemas.exception import (
 
 from ...agents.utils.file_handling import read_text_file_with_encoding_fallback
 from ..utils import schedule_agent_reload
+from ..auth import (
+    delete_agent_credentials,
+    get_agent_account,
+    set_agent_credentials,
+)
 from ...config.config import (
     AgentProfileConfig,
     AgentProfileRef,
@@ -47,6 +52,8 @@ class AgentSummary(BaseModel):
     workspace_dir: str
     enabled: bool
     active_model: ModelSlotConfig | None = None
+    auth_username: str | None = None
+    has_auth_account: bool = False
 
 
 class AgentListResponse(BaseModel):
@@ -76,6 +83,8 @@ class CreateAgentRequest(BaseModel):
     language: str | None = None
     skill_names: list[str] | None = None
     active_model: ModelSlotConfig | None = None
+    auth_username: str | None = None
+    auth_password: str | None = None
 
     @field_validator("id", mode="before")
     @classmethod
@@ -92,6 +101,17 @@ class CreateAgentRequest(BaseModel):
     @classmethod
     def strip_workspace_dir(cls, value: str | None) -> str | None:
         """Strip accidental whitespace"""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped if stripped else None
+        return value
+
+    @field_validator("auth_username", "auth_password", mode="before")
+    @classmethod
+    def strip_auth_fields(cls, value: str | None) -> str | None:
+        """Strip accidental whitespace from optional auth fields."""
         if value is None:
             return None
         if isinstance(value, str):
@@ -154,20 +174,57 @@ def _read_profile_description(workspace_dir: str) -> str:
         return ""
 
 
+def _request_agent_scope(request: Request | None) -> str | None:
+    """Return authenticated agent scope, or None for admin/global callers."""
+    if request is None:
+        return None
+    role = getattr(request.state, "auth_role", "admin")
+    if role == "agent":
+        return getattr(request.state, "auth_agent_id", None)
+    return None
+
+
+def _require_admin(request: Request | None) -> None:
+    """Reject agent-scoped users for admin-only agent management actions."""
+    if _request_agent_scope(request):
+        raise HTTPException(
+            status_code=403,
+            detail="This operation requires an admin account",
+        )
+
+
+def _require_agent_access(request: Request | None, agent_id: str) -> None:
+    """Ensure an agent-scoped user is operating on its own agent."""
+    scoped_agent = _request_agent_scope(request)
+    if scoped_agent and scoped_agent != agent_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden for this agent",
+        )
+
+
 @router.get(
     "",
     response_model=AgentListResponse,
     summary="List all agents",
     description="Get list of all configured agents",
 )
-async def list_agents() -> AgentListResponse:
+async def list_agents(request: Request) -> AgentListResponse:
     """List all configured agents."""
     config = load_config()
     ordered_agent_ids = _normalized_agent_order(config)
+    scoped_agent = _request_agent_scope(request)
+    if scoped_agent:
+        ordered_agent_ids = [
+            agent_id
+            for agent_id in ordered_agent_ids
+            if agent_id == scoped_agent
+        ]
 
     agents = []
     for agent_id in ordered_agent_ids:
         agent_ref = config.agents.profiles[agent_id]
+        account = get_agent_account(agent_id)
         try:
             agent_config = load_agent_config(agent_id)
             description = agent_config.description or ""
@@ -189,6 +246,10 @@ async def list_agents() -> AgentListResponse:
                     workspace_dir=agent_ref.workspace_dir,
                     enabled=getattr(agent_ref, "enabled", True),
                     active_model=active_model,
+                    auth_username=(
+                        account["username"] if account else None
+                    ),
+                    has_auth_account=account is not None,
                 ),
             )
         except Exception:  # noqa: E722
@@ -199,6 +260,10 @@ async def list_agents() -> AgentListResponse:
                     description="",
                     workspace_dir=agent_ref.workspace_dir,
                     enabled=getattr(agent_ref, "enabled", True),
+                    auth_username=(
+                        account["username"] if account else None
+                    ),
+                    has_auth_account=account is not None,
                 ),
             )
 
@@ -211,9 +276,11 @@ async def list_agents() -> AgentListResponse:
     description="Save the full ordered list of configured agent IDs",
 )
 async def reorder_agents(
+    request: Request,
     reorder_request: ReorderAgentsRequest = Body(...),
 ) -> dict:
     """Persist the full ordered list of agent IDs."""
+    _require_admin(request)
     config = load_config()
     configured_ids = list(config.agents.profiles.keys())
 
@@ -241,10 +308,17 @@ async def reorder_agents(
     summary="Get agent details",
     description="Get complete configuration for a specific agent",
 )
-async def get_agent(agentId: str = PathParam(...)) -> AgentProfileConfig:
+async def get_agent(
+    request: Request,
+    agentId: str = PathParam(...),
+) -> AgentProfileConfig:
     """Get agent configuration."""
+    _require_agent_access(request, agentId)
     try:
-        agent_config = load_agent_config(agentId)
+        agent_config = load_agent_config(agentId).model_copy(deep=True)
+        account = get_agent_account(agentId)
+        agent_config.auth_username = account["username"] if account else None
+        agent_config.auth_password = None
         return agent_config
     except (ValueError, AppBaseException) as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -277,6 +351,7 @@ def _generate_unique_id(existing_ids: set[str]) -> str:
     description="Create a new agent with optional custom ID",
 )
 async def create_agent(
+    http_request: Request,
     request: CreateAgentRequest = Body(...),
 ) -> AgentProfileRef:
     """Create a new agent.
@@ -285,8 +360,17 @@ async def create_agent(
     (validated for URL-safe characters, length, reserved words, and
     uniqueness).  Otherwise a random short UUID is generated.
     """
+    _require_admin(http_request)
     config = load_config()
     existing_ids = set(config.agents.profiles.keys())
+    if (request.auth_username is None) != (request.auth_password is None):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Both auth_username and auth_password are required "
+                "to create an agent account"
+            ),
+        )
 
     if request.id:
         try:
@@ -347,6 +431,18 @@ async def create_agent(
     config.agents.agent_order = _normalized_agent_order(config)
     save_config(config)
     save_agent_config(new_id, agent_config)
+    if request.auth_username or request.auth_password:
+        try:
+            set_agent_credentials(
+                new_id,
+                username=request.auth_username,
+                password=request.auth_password,
+            )
+        except ValueError as exc:
+            del config.agents.profiles[new_id]
+            config.agents.agent_order = _normalized_agent_order(config)
+            save_config(config)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     logger.info(f"Created new agent: {new_id} (name={request.name})")
 
@@ -365,6 +461,7 @@ async def update_agent(
     request: Request = None,
 ) -> AgentProfileConfig:
     """Update agent configuration."""
+    _require_agent_access(request, agentId)
     config = load_config()
 
     if agentId not in config.agents.profiles:
@@ -376,14 +473,28 @@ async def update_agent(
     existing_config = load_agent_config(agentId)
 
     update_data = agent_config.model_dump(exclude_unset=True)
+    auth_username = update_data.pop("auth_username", None)
+    auth_password = update_data.pop("auth_password", None)
     for key, value in update_data.items():
         if key != "id":
             setattr(existing_config, key, value)
 
     existing_config.id = agentId
     save_agent_config(agentId, existing_config)
+    if auth_username is not None or auth_password is not None:
+        try:
+            set_agent_credentials(
+                agentId,
+                username=auth_username,
+                password=auth_password,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     schedule_agent_reload(request, agentId)
 
+    account = get_agent_account(agentId)
+    agent_config.auth_username = account["username"] if account else None
+    agent_config.auth_password = None
     return agent_config
 
 
@@ -397,6 +508,7 @@ async def delete_agent(
     request: Request = None,
 ) -> dict:
     """Delete an agent."""
+    _require_admin(request)
     config = load_config()
 
     if agentId not in config.agents.profiles:
@@ -417,6 +529,7 @@ async def delete_agent(
     del config.agents.profiles[agentId]
     config.agents.agent_order = _normalized_agent_order(config)
     save_config(config)
+    delete_agent_credentials(agentId)
 
     return {"success": True, "agent_id": agentId}
 
@@ -432,6 +545,7 @@ async def toggle_agent_enabled(
     request: Request = None,
 ) -> dict:
     """Toggle agent enabled state."""
+    _require_admin(request)
     config = load_config()
 
     if agentId not in config.agents.profiles:
