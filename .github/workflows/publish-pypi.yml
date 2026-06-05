@@ -1,7 +1,7 @@
 # Publish Python package to PyPI when a release is created.
 # Build includes console frontend (see scripts/wheel_build.sh).
-# Manual trigger: can optionally force push to PyPI or just upload artifacts.
-# Release trigger: publishes to PyPI.
+# Manual trigger: builds artifacts by default, or optionally publishes to PyPI.
+# Release trigger: publishes to PyPI with Trusted Publishing (OIDC).
 
 name: Publish Python Package to PyPI
 
@@ -18,10 +18,14 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/qwenpaw
     steps:
       - uses: actions/checkout@v4
 
@@ -61,17 +65,14 @@ jobs:
       - name: Build package
         run: python -m build
 
-      - name: Upload wheel to artifacts (manual trigger without force push)
+      - name: Upload distributions to artifacts (manual trigger without force push)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.force_push_to_pypi != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: qwenpaw-wheel
-          path: dist/*.whl
+          name: qwenpaw-dist
+          path: dist/*
           retention-days: 30
 
       - name: Publish package to PyPI
         if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.force_push_to_pypi == 'true')
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          user: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
