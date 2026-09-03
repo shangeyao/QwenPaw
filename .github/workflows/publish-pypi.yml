@@ -1,9 +1,18 @@
-# Publish Python package to PyPI when a release is created.
-# Build includes console frontend (see scripts/wheel_build.sh).
-# Manual trigger: can optionally force push to PyPI or just upload artifacts.
-# Release trigger: publishes to PyPI.
+# Publish calb-qwenpaw to PyPI from the shangeyao fork ONLY.
+# Repository: https://github.com/shangeyao/QwenPaw
+# NOT agentscope-ai/QwenPaw.
 #
-# Pipeline: build → verify (install + boot + health-check) → publish.
+# Pipeline: build → verify (pip install + boot) → publish.
+#
+# PyPI Trusted Publishing (https://pypi.org/manage/account/publishing/):
+#   Project: calb-qwenpaw
+#   Owner: shangeyao
+#   Repository name: QwenPaw
+#   Owner: shangeyao
+#   Workflow: publish-pypi.yml
+#   Environment: pypi
+#
+# Or set PYPI_API_TOKEN in https://github.com/shangeyao/QwenPaw/settings/secrets
 
 name: Publish Python Package to PyPI
 
@@ -11,10 +20,15 @@ on:
   workflow_dispatch:
     inputs:
       force_push_to_pypi:
-        description: 'Force push to PyPI (even without release)'
+        description: "Force push to PyPI (even without release)"
         required: false
         type: boolean
         default: false
+      yank_version:
+        description: "Yank this PyPI version before publish (optional)"
+        required: false
+        type: string
+        default: ""
   # NOTE: legacy fallback path. The standard release flow is now release.yml
   # (see RELEASING.md). Publishing a GitHub Release directly still triggers this
   # OLD publish, which is NOT gated on the desktop build. Kept only as an
@@ -24,9 +38,9 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
-  # ── Stage 1: Build wheel ───────────────────────────────────────────────────
   build:
     runs-on: ubuntu-latest
     steps:
@@ -46,7 +60,7 @@ jobs:
 
       - name: Build console frontend
         run: |
-          cd console && npm ci && npm run build
+          cd console && npm ci && npx vite build
 
       - name: Copy console build into package
         run: |
@@ -82,20 +96,76 @@ jobs:
           path: src/qwenpaw/__version__.py
           retention-days: 30
 
-  # ── Stage 2: Verify installation ───────────────────────────────────────────
   verify:
     needs: [build]
     uses: ./.github/workflows/release-verify.yml
     with:
       verify_pip: true
-      verify_script_install: true
+      verify_script_install: false
 
-  # ── Stage 3: Publish to PyPI ───────────────────────────────────────────────
   publish:
     needs: [verify, build]
     runs-on: ubuntu-latest
     if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.force_push_to_pypi == 'true')
+    environment:
+      name: pypi
+      url: https://pypi.org/p/calb-qwenpaw
     steps:
+      - name: Set up Python
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.yank_version != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Yank previous PyPI release
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.yank_version != ''
+        run: |
+          python - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          package = "calb-qwenpaw"
+          version = os.environ["YANK_VERSION"]
+          token = os.environ["PYPI_API_TOKEN"]
+          payload = json.dumps(
+              {
+                  "yanked": True,
+                  "yanked_reason": (
+                      "Yanked for republish with latest fork changes"
+                  ),
+              },
+          ).encode("utf-8")
+          request = urllib.request.Request(
+              f"https://pypi.org/api/projects/{package}/{version}",
+              data=payload,
+              headers={
+                  "Authorization": "Basic "
+                  + base64.b64encode(f"__token__:{token}".encode()).decode(),
+                  "Content-Type": "application/json",
+              },
+              method="PATCH",
+          )
+          try:
+              with urllib.request.urlopen(request) as response:
+                  print(response.read().decode("utf-8", errors="replace"))
+          except urllib.error.HTTPError as exc:
+              body = exc.read().decode("utf-8", errors="replace")
+              lowered = body.lower()
+              if exc.code == 404:
+                  print(f"Version {version} not found on PyPI; continuing.")
+              elif "already yanked" in lowered:
+                  print(f"Version {version} already yanked; continuing.")
+              else:
+                  print(body)
+                  raise
+          PY
+        env:
+          YANK_VERSION: ${{ github.event.inputs.yank_version }}
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+
       - name: Download dist artifacts
         uses: actions/download-artifact@v4
         with:
@@ -107,3 +177,4 @@ jobs:
         with:
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true

@@ -34,6 +34,13 @@ vi.mock("../../../stores/agentStore", () => ({
     selector ? selector({ agents: mocks.agents }) : { agents: mocks.agents },
 }));
 
+vi.mock("../../../stores/authStore", () => ({
+  useAuthStore: vi.fn(
+    (selector: (state: { boundAgentId: () => null }) => unknown) =>
+      selector({ boundAgentId: () => null }),
+  ),
+}));
+
 import { useInboxData } from "./useInboxData";
 
 function event(overrides: Record<string, unknown> = {}) {

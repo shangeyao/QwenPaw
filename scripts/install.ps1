@@ -32,7 +32,8 @@ $QwenpawHome     = if ($env:QWENPAW_HOME) { $env:QWENPAW_HOME } else { Join-Path
 $QwenpawVenv     = Join-Path $QwenpawHome "venv"
 $QwenpawBin      = Join-Path $QwenpawHome "bin"
 $PythonVersion = "3.12"
-$QwenpawRepo     = "https://github.com/agentscope-ai/QwenPaw.git"
+$QwenpawRepo     = "https://github.com/shangeyao/QwenPaw.git"
+$QwenpawPackage  = "calb-qwenpaw"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 function Write-Info { param([string]$Message) Write-Host "[qwenpaw] " -ForegroundColor Green  -NoNewline; Write-Host $Message }
@@ -313,21 +314,77 @@ if ($FromSource) {
         }
     }
 } else {
-    $package = "qwenpaw"
-    if ($Version) { $package = "qwenpaw==$Version" }
+    $package = $QwenpawPackage
+    if ($Version) { $package = "${QwenpawPackage}==$Version" }
 
     $prereleaseArgs = @()
     if ($Prerelease) { $prereleaseArgs = @("--prerelease=allow") }
 
+    Write-Info "Removing conflicting Python packages (qwenpaw, copaw, $QwenpawPackage)..."
+    foreach ($pkg in @("qwenpaw", "copaw", $QwenpawPackage)) {
+        uv pip uninstall -y $pkg --python $VenvPython -q 2>$null
+    }
+
     Write-Info "Installing ${package}${ExtrasSuffix} from PyPI..."
-    uv pip install "${package}${ExtrasSuffix}" --python $VenvPython --quiet --refresh-package qwenpaw @prereleaseArgs
+    uv pip install --upgrade --force-reinstall "${package}${ExtrasSuffix}" --python $VenvPython --quiet --refresh-package $QwenpawPackage @prereleaseArgs
     if ($LASTEXITCODE -ne 0) { Stop-WithError "Installation failed" }
 }
 
 # Verify the CLI entry point exists
 if (-not (Test-Path $VenvQwenpaw)) { Stop-WithError "Installation failed: qwenpaw CLI not found in venv" }
 
-Write-Info "QwenPaw installed successfully"
+$verifyScript = @"
+import importlib.metadata as im
+import sys
+
+expected = '$QwenpawPackage'
+provider = None
+for dist in im.distributions():
+    try:
+        top = dist.read_text('top_level.txt') or ''
+        if 'qwenpaw' in [x.strip() for x in top.split() if x.strip()]:
+            provider = dist.metadata['Name']
+            break
+    except Exception:
+        pass
+
+from qwenpaw.__version__ import __version__
+
+if provider != expected:
+    sys.stderr.write(
+        f'wrong package: {provider or "unknown"} provides qwenpaw '
+        f'(expected {expected}), version={__version__}\n'
+    )
+    raise SystemExit(1)
+if 'b' in __version__:
+    sys.stderr.write(f'pre-release version: {__version__}\n')
+    raise SystemExit(1)
+print(__version__)
+"@
+
+$installedVersion = & $VenvPython -c $verifyScript 2>&1
+if ($LASTEXITCODE -ne 0 -or -not $installedVersion) {
+    Stop-WithError "Installation failed: $installedVersion. Run: uv pip uninstall -y qwenpaw copaw $QwenpawPackage --python $VenvPython; uv pip install --upgrade --force-reinstall --refresh-package $QwenpawPackage $QwenpawPackage --python $VenvPython"
+}
+Write-Info "QwenPaw $installedVersion installed successfully ($QwenpawPackage)"
+
+$runningVersion = & $VenvPython -c @"
+import json
+import urllib.request
+
+for url in ('http://127.0.0.1:8088/api/version', 'http://localhost:8088/api/version'):
+    try:
+        with urllib.request.urlopen(url, timeout=2) as resp:
+            body = json.load(resp)
+        print(body.get('version', '') or '')
+        break
+    except Exception:
+        pass
+"@ 2>$null
+if ($runningVersion -and $runningVersion -ne $installedVersion) {
+    Write-Warn "Running QwenPaw server still reports $runningVersion (installed: $installedVersion)."
+    Write-Warn "Restart the service: qwenpaw shutdown; qwenpaw app"
+}
 
 # Check console availability (for PyPI installs, check the installed package)
 if (-not $script:ConsoleAvailable) {
@@ -475,6 +532,8 @@ Write-Host "  qwenpaw init" -ForegroundColor White -NoNewline; Write-Host "     
 Write-Host "  qwenpaw app"  -ForegroundColor White -NoNewline; Write-Host "        # start QwenPaw"
 Write-Host ""
 Write-Host "To upgrade later, re-run this installer."
+Write-Host "If the web UI still shows an old version, restart: " -NoNewline
+Write-Host "qwenpaw shutdown; qwenpaw app" -ForegroundColor White
 Write-Host "To uninstall, run: " -NoNewline
 Write-Host "qwenpaw uninstall" -ForegroundColor White
 

@@ -11,6 +11,11 @@ from pydantic import BaseModel, Field
 
 from ..approvals import get_approval_service
 from ..approvals.display import approval_display_fields
+from ..auth_scope import (
+    approval_belongs_to_agent,
+    get_request_agent_scope,
+    require_agent_approval_access,
+)
 from ...security.tool_guard.approval import ApprovalDecision, ApprovalScope
 
 logger = logging.getLogger(__name__)
@@ -103,6 +108,8 @@ async def post_approval_approve(
             detail="Root session mismatch: cannot approve other session trees",
         )
 
+    require_agent_approval_access(request, pending)
+
     # Parse the approval scope. Unknown / omitted values fall back to None,
     # which the governance consumer treats as EXACT (least-privilege).
     scope: ApprovalScope | None = None
@@ -187,6 +194,8 @@ async def post_approval_deny(
             detail="Root session mismatch: cannot approve other session trees",
         )
 
+    require_agent_approval_access(request, pending)
+
     # Resolve the Future
     resolved = await svc.resolve_request(
         body.request_id,
@@ -214,7 +223,7 @@ async def post_approval_deny(
     summary="List pending approval requests",
 )
 async def get_approval_list(
-    request: Request,  # pylint: disable=unused-argument
+    request: Request,
     session_id: Optional[str] = None,
 ) -> ApprovalListResponse:
     """List all pending approval requests.
@@ -222,6 +231,7 @@ async def get_approval_list(
     Optionally filter by session_id.
     """
     svc = get_approval_service()
+    scoped_agent = get_request_agent_scope(request)
 
     if session_id:
         logger.debug(
@@ -235,6 +245,13 @@ async def get_approval_list(
         # pylint: disable=protected-access
         async with svc._lock:
             pending_list = list(svc._pending.values())
+
+    if scoped_agent:
+        pending_list = [
+            pending
+            for pending in pending_list
+            if approval_belongs_to_agent(pending, scoped_agent)
+        ]
 
     # Serialize pending approvals
     result = []

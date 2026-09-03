@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import importlib
 import logging
+import sys
 import threading
+import time
 from typing import TYPE_CHECKING
 
 from .base import BaseChannel
@@ -49,33 +51,42 @@ def _load_builtin_channels() -> dict[str, type[BaseChannel]]:
     A single optional dependency failure should not break CLI startup.
     """
     out: dict[str, type[BaseChannel]] = {}
+    package = __package__ or "qwenpaw.app.channels"
     for key, (module_name, class_name) in _BUILTIN_SPECS.items():
-        try:
-            mod = importlib.import_module(module_name, package=__package__)
-            cls = getattr(mod, class_name)
-            if not (
-                isinstance(cls, type)
-                and issubclass(cls, BaseChannel)
-                and cls is not BaseChannel
-            ):
-                raise TypeError(
-                    f"{module_name}.{class_name} is not a BaseChannel subtype",
-                )
-        except Exception:
-            if key in _REQUIRED_CHANNEL_KEYS:
-                logger.error(
-                    'failed to load required built-in channel "%s"',
+        full_module_name = f"{package}{module_name}"
+        for attempt in range(2):
+            try:
+                mod = importlib.import_module(module_name, package=package)
+                cls = getattr(mod, class_name)
+                if not (
+                    isinstance(cls, type)
+                    and issubclass(cls, BaseChannel)
+                    and cls is not BaseChannel
+                ):
+                    raise TypeError(
+                        f"{module_name}.{class_name} is not a "
+                        "BaseChannel subtype",
+                    )
+                out[key] = cls
+                break
+            except Exception:
+                if attempt == 0 and key not in _REQUIRED_CHANNEL_KEYS:
+                    sys.modules.pop(full_module_name, None)
+                    time.sleep(0.25)
+                    continue
+                if key in _REQUIRED_CHANNEL_KEYS:
+                    logger.error(
+                        'failed to load required built-in channel "%s"',
+                        key,
+                        exc_info=True,
+                    )
+                    raise
+                logger.debug(
+                    "built-in channel unavailable: %s",
                     key,
                     exc_info=True,
                 )
-                raise
-            logger.debug(
-                "built-in channel unavailable: %s",
-                key,
-                exc_info=True,
-            )
-            continue
-        out[key] = cls
+                break
     return out
 
 

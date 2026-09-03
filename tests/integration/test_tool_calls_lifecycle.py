@@ -429,6 +429,13 @@ def test_session_level_approval_off_short_circuits_governance(
 _SHELL_SLEEP_SECS = 10
 
 
+def _poll_timeout() -> float:
+    """Return how long to wait for a tool-call entry to appear."""
+    if sys.platform.startswith("win"):
+        return 45.0
+    return 20.0
+
+
 def _portable_sleep_cmd(seconds: int) -> str:
     """Return a shell command that blocks for exactly ``seconds``.
 
@@ -497,13 +504,15 @@ def _submit_shell_sleep_task(  # pylint: disable=redefined-outer-name
     return submit_resp.json()["task_id"], session_id
 
 
-def _poll_for_entry(app_server, session_id, timeout=60.0):
+def _poll_for_entry(app_server, session_id, timeout=None):
     """Poll list_calls until at least one entry appears; return it.
 
     The 60s window absorbs slow-runner latency (2-core Windows under
     xdist load intermittently needs >20s from task submit to the entry
     becoming observable); passing runs return as soon as it appears.
     """
+    if timeout is None:
+        timeout = _poll_timeout()
     deadline = time.time() + timeout
     while time.time() < deadline:
         resp = app_server.api_request(

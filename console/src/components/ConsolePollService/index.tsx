@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { MessageCircle, X } from "lucide-react";
 import { consoleApi, type PushMessage } from "../../api/modules/console";
 import { useApprovalContext } from "../../contexts/ApprovalContext";
+import { useAuthStore } from "../../stores/authStore";
+import { belongsToBoundAgent } from "../../utils/authScope";
 import styles from "./index.module.less";
 
 const POLL_INTERVAL_MS = 2500;
@@ -41,10 +43,19 @@ export default function ConsolePollService() {
           // to avoid triggering unnecessary re-renders in Chat component
           // every 2.5s polling cycle.
           if (res?.pending_approvals) {
-            const serialized = JSON.stringify(res.pending_approvals);
+            const boundAgentId = useAuthStore.getState().boundAgentId();
+            const scopedApprovals = boundAgentId
+              ? res.pending_approvals.filter((approval) =>
+                  belongsToBoundAgent(
+                    approval.owner_agent_id || approval.agent_id,
+                    boundAgentId,
+                  ),
+                )
+              : res.pending_approvals;
+            const serialized = JSON.stringify(scopedApprovals);
             if (serialized !== prevApprovalsRef.current) {
               prevApprovalsRef.current = serialized;
-              setApprovals(res.pending_approvals);
+              setApprovals(scopedApprovals);
             }
           }
 

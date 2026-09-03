@@ -1,6 +1,8 @@
 declare const VITE_API_BASE_URL: string;
 declare const TOKEN: string;
 
+import { useAuthStore } from "../stores/authStore";
+
 const AUTH_TOKEN_KEY = "qwenpaw_auth_token";
 
 /**
@@ -38,6 +40,7 @@ export function setAuthToken(token: string): void {
  */
 export function clearAuthToken(): void {
   localStorage.removeItem(AUTH_TOKEN_KEY);
+  useAuthStore.getState().clearSession();
 }
 
 /**

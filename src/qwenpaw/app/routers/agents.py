@@ -32,6 +32,7 @@ from ..mail.driver_config import (
     sync_qwenpawmail_driver_card as _sync_qwenpawmail_driver_card,
 )
 from ..utils import safe_join, schedule_agent_reload
+from ..auth import delete_agent_credentials
 from ...config.config import (
     AgentMailConfig,
     AgentProfileConfig,
@@ -393,6 +394,35 @@ def _read_profile_description(workspace_dir: str) -> str:
         return ""
 
 
+def _request_agent_scope(request: Request | None) -> str | None:
+    """Return authenticated agent scope, or None for admin/global callers."""
+    if request is None:
+        return None
+    role = getattr(request.state, "auth_role", "admin")
+    if role == "agent":
+        return getattr(request.state, "auth_agent_id", None)
+    return None
+
+
+def _require_admin(request: Request | None) -> None:
+    """Reject agent-scoped users for admin-only agent management actions."""
+    if _request_agent_scope(request):
+        raise HTTPException(
+            status_code=403,
+            detail="This operation requires an admin account",
+        )
+
+
+def _require_agent_access(request: Request | None, agent_id: str) -> None:
+    """Ensure an agent-scoped user is operating on its own agent."""
+    scoped_agent = _request_agent_scope(request)
+    if scoped_agent and scoped_agent != agent_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden for this agent",
+        )
+
+
 @router.get(
     "",
     response_model=AgentListResponse,
@@ -406,6 +436,13 @@ async def list_agents(request: Request = None) -> AgentListResponse:
         _get_multi_agent_manager(request) if request is not None else None
     )
     ordered_agent_ids = _display_agent_order(config)
+    scoped_agent = _request_agent_scope(request)
+    if scoped_agent:
+        ordered_agent_ids = [
+            agent_id
+            for agent_id in ordered_agent_ids
+            if agent_id == scoped_agent
+        ]
 
     agents = []
     for agent_id in ordered_agent_ids:
@@ -500,9 +537,11 @@ async def list_agents(request: Request = None) -> AgentListResponse:
     description="Save the full ordered list of configured agent IDs",
 )
 async def reorder_agents(
+    request: Request,
     reorder_request: ReorderAgentsRequest = Body(...),
 ) -> dict:
     """Persist the full ordered list of agent IDs."""
+    _require_admin(request)
 
     def apply_order(config: Any) -> None:
         configured_ids = list(config.agents.profiles.keys())
@@ -573,8 +612,12 @@ async def set_agent_pinned(
     summary="Get agent details",
     description="Get complete configuration for a specific agent",
 )
-async def get_agent(agentId: str = PathParam(...)) -> AgentProfileConfig:
+async def get_agent(
+    request: Request,
+    agentId: str = PathParam(...),
+) -> AgentProfileConfig:
     """Get agent configuration."""
+    _require_agent_access(request, agentId)
     try:
         agent_config = await run_sync_io(load_agent_config, agentId)
         return agent_config
@@ -757,8 +800,8 @@ async def _rollback_qwenpawmail_update(
     description="Create a new agent with optional custom ID",
 )
 async def create_agent(
+    http_request: Request,
     request: CreateAgentRequest = Body(...),
-    http_request: Request = None,
 ) -> AgentProfileRef:
     """Create a new agent.
 
@@ -770,6 +813,7 @@ async def create_agent(
     if request.backend != "qwenpaw":
         _get_available_third_party_provider(request.backend)
 
+    _require_admin(http_request)
     config = await run_sync_io(load_config)
     existing_ids = set(config.agents.profiles.keys())
 
@@ -1000,11 +1044,12 @@ def _persist_created_agent(
     ),
 )
 async def copy_agent(
+    http_request: Request,
     agentId: str = PathParam(...),
     request: CopyAgentRequest = Body(...),
-    http_request: Request = None,
 ) -> AgentProfileRef:
     """Copy selected agent config files into a newly created agent."""
+    _require_admin(http_request)
     config = await run_sync_io(load_config)
 
     if agentId not in config.agents.profiles:
@@ -1100,6 +1145,7 @@ async def update_agent(  # pylint: disable=too-many-statements
     request: Request = None,
 ) -> AgentProfileConfig:
     """Update agent configuration."""
+    _require_agent_access(request, agentId)
     config = await run_sync_io(load_config)
 
     if agentId not in config.agents.profiles:
@@ -1147,6 +1193,8 @@ async def update_agent(  # pylint: disable=too-many-statements
         _validate_mail_config(effective_mail)
 
     update_data = agent_config.model_dump(exclude_unset=True)
+    update_data.pop("auth_username", None)
+    update_data.pop("auth_password", None)
     previous_config = existing_config_snap
 
     def apply_update(existing_config: AgentProfileConfig) -> None:
@@ -1600,6 +1648,7 @@ async def delete_agent(
     request: Request = None,
 ) -> dict:
     """Delete an agent."""
+    _require_admin(request)
     config = await run_sync_io(load_config)
 
     if agentId not in config.agents.profiles:
@@ -1634,6 +1683,7 @@ async def delete_agent(
         )
 
     await run_sync_io(mutate_config, remove_agent)
+    delete_agent_credentials(agentId)
 
     return {"success": True, "agent_id": agentId}
 
@@ -1649,6 +1699,7 @@ async def toggle_agent_enabled(
     request: Request = None,
 ) -> dict:
     """Toggle agent enabled state."""
+    _require_admin(request)
     config = await run_sync_io(load_config)
 
     if agentId not in config.agents.profiles:

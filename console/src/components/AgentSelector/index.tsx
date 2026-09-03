@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { SparkDownLine, SparkUpLine } from "@agentscope-ai/icons";
 import { useAgentStore } from "../../stores/agentStore";
+import { useAuthStore } from "../../stores/authStore";
 import { agentsApi } from "../../api/modules/agents";
 import type { AgentSummary } from "../../api/types/agents";
 import { useTranslation } from "react-i18next";
@@ -35,6 +36,9 @@ export default function AgentSelector({
   const navigate = useNavigate();
   const { selectedAgent, agents, setSelectedAgent, setAgents, refreshAgents } =
     useAgentStore();
+  const session = useAuthStore((state) => state.session);
+  const isAgentAccount = session?.role === "agent";
+  const boundAgentId = isAgentAccount ? session?.agentId ?? null : null;
   const { message } = useAppMessage();
   const messageRef = useRef(message);
   const translationRef = useRef(t);
@@ -71,10 +75,13 @@ export default function AgentSelector({
     void loadAgents();
   }, [loadAgents]);
 
-  const chatAgents = useMemo(
-    () => agents.filter(isAgentAvailableInChat),
-    [agents],
-  );
+  const chatAgents = useMemo(() => {
+    const available = agents.filter(isAgentAvailableInChat);
+    if (isAgentAccount && boundAgentId) {
+      return available.filter((agent) => agent.id === boundAgentId);
+    }
+    return available;
+  }, [agents, boundAgentId, isAgentAccount]);
   const enabledAgents = useMemo(
     () => chatAgents.filter((agent) => agent.enabled),
     [chatAgents],
@@ -99,6 +106,10 @@ export default function AgentSelector({
   );
 
   const handleChange = (value: string) => {
+    if (isAgentAccount) {
+      return;
+    }
+
     const targetAgent = chatAgents.find((agent) => agent.id === value);
     if (!targetAgent?.enabled) return;
     setSelectedAgent(value);
@@ -106,9 +117,18 @@ export default function AgentSelector({
   };
 
   useEffect(() => {
-    if (!agents.length || selectedAgent === "default") return;
+    if (isAgentAccount) {
+      if (boundAgentId) {
+        setSelectedAgent(boundAgentId);
+      }
+      return;
+    }
 
-    const currentAgent = agents.find((agent) => agent.id === selectedAgent);
+    if (!chatAgents.length || selectedAgent === "default") return;
+
+    const currentAgent = chatAgents.find(
+      (agent) => agent.id === selectedAgent,
+    );
     if (!currentAgent) {
       setSelectedAgent("default");
       message.warning(t("agent.currentAgentDeleted"));
@@ -118,7 +138,15 @@ export default function AgentSelector({
       setSelectedAgent("default");
       message.warning(t("agent.currentAgentDisabled"));
     }
-  }, [agents, message, selectedAgent, setSelectedAgent, t]);
+  }, [
+    boundAgentId,
+    isAgentAccount,
+    message,
+    selectedAgent,
+    setSelectedAgent,
+    t,
+    chatAgents,
+  ]);
 
   const stopSelectorAction = (event: MouseEvent<HTMLElement>) => {
     event.preventDefault();
@@ -356,11 +384,20 @@ export default function AgentSelector({
         placeholder={t("agent.selectAgent")}
         optionLabelProp="label"
         popupClassName={styles.agentSelectorDropdown}
-        onOpenChange={setDropdownOpen}
+        onOpenChange={isAgentAccount ? undefined : setDropdownOpen}
+        open={isAgentAccount ? false : dropdownOpen}
+        disabled={isAgentAccount}
         suffixIcon={
-          dropdownOpen ? <SparkUpLine size={20} /> : <SparkDownLine size={20} />
+          isAgentAccount ? null : dropdownOpen ? (
+            <SparkUpLine size={20} />
+          ) : (
+            <SparkDownLine size={20} />
+          )
         }
-        popupRender={(menu) => (
+        popupRender={
+          isAgentAccount
+            ? undefined
+            : (menu) => (
           <div className={styles.dropdownContent}>
             <div className={styles.dropdownHeader}>
               <span className={styles.dropdownHeaderTitle}>
@@ -420,7 +457,8 @@ export default function AgentSelector({
               </div>
             )}
           </div>
-        )}
+        )
+        }
       >
         <Select.OptGroup label={t("agent.pinnedAgents")}>
           {pinnedAgents.map((agent) => (

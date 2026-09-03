@@ -28,7 +28,8 @@ QWENPAW_HOME="${QWENPAW_HOME:-$HOME/.qwenpaw}"
 QWENPAW_VENV="$QWENPAW_HOME/venv"
 QWENPAW_BIN="$QWENPAW_HOME/bin"
 PYTHON_VERSION="3.12"
-QWENPAW_REPO="https://github.com/agentscope-ai/QwenPaw.git"
+QWENPAW_REPO="https://github.com/shangeyao/QwenPaw.git"
+QWENPAW_PACKAGE="calb-qwenpaw"
 
 # New: Intelligent selection of PyPI source (automatically using Alibaba Cloud mirror for domestic users, and official source for overseas users)
 choose_pypi_mirror() {
@@ -263,9 +264,9 @@ if [ "$FROM_SOURCE" = true ]; then
         # CLONE_DIR is cleaned up by trap; no need for cleanup_console/cleanup_docs
     fi
 else
-    PACKAGE="qwenpaw"
+    PACKAGE="$QWENPAW_PACKAGE"
     if [ -n "$VERSION" ]; then
-        PACKAGE="qwenpaw==$VERSION"
+        PACKAGE="${QWENPAW_PACKAGE}==$VERSION"
     fi
 
     PRERELEASE_ARGS=()
@@ -273,13 +274,72 @@ else
         PRERELEASE_ARGS=(--prerelease=allow)
     fi
 
+    info "Removing conflicting Python packages (qwenpaw, copaw, ${QWENPAW_PACKAGE})..."
+    for _pkg in qwenpaw copaw "$QWENPAW_PACKAGE"; do
+        uv pip uninstall -y "$_pkg" --python "$QWENPAW_VENV/bin/python" -q 2>/dev/null || true
+    done
+
     info "Installing ${PACKAGE}${EXTRAS_SUFFIX} from PyPI..."
-    uv pip install "${PACKAGE}${EXTRAS_SUFFIX}" --python "$QWENPAW_VENV/bin/python" --quiet --index-url "$PYPI_MIRROR" --refresh-package qwenpaw ${PRERELEASE_ARGS[@]+"${PRERELEASE_ARGS[@]}"}
+    uv pip install --upgrade --force-reinstall "${PACKAGE}${EXTRAS_SUFFIX}" --python "$QWENPAW_VENV/bin/python" --quiet --index-url "$PYPI_MIRROR" --refresh-package "$QWENPAW_PACKAGE" ${PRERELEASE_ARGS[@]+"${PRERELEASE_ARGS[@]}"}
 fi
 
 # Verify the CLI entry point exists
 [ -x "$QWENPAW_VENV/bin/qwenpaw" ] || die "Installation failed: qwenpaw CLI not found in venv"
-info "QwenPaw installed successfully"
+
+VERIFY_OUTPUT="$("$QWENPAW_VENV/bin/python" -c "
+import importlib.metadata as im
+import sys
+
+expected = '${QWENPAW_PACKAGE}'
+provider = None
+for dist in im.distributions():
+    try:
+        top = dist.read_text('top_level.txt') or ''
+        if 'qwenpaw' in [x.strip() for x in top.split() if x.strip()]:
+            provider = dist.metadata['Name']
+            break
+    except Exception:
+        pass
+
+from qwenpaw.__version__ import __version__
+
+if provider != expected:
+    sys.stderr.write(
+        f'wrong package: {provider or \"unknown\"} provides qwenpaw '
+        f'(expected {expected}), version={__version__}\n'
+    )
+    raise SystemExit(1)
+if 'b' in __version__:
+    sys.stderr.write(f'pre-release version: {__version__}\n')
+    raise SystemExit(1)
+print(__version__)
+" 2>&1 || true)"
+VERIFY_STATUS=$?
+if [ "$VERIFY_STATUS" -ne 0 ] || [ -z "$VERIFY_OUTPUT" ]; then
+    die "Installation failed: ${VERIFY_OUTPUT:-could not verify qwenpaw package}. Run: uv pip uninstall -y qwenpaw copaw ${QWENPAW_PACKAGE} --python $QWENPAW_VENV/bin/python && uv pip install --upgrade --force-reinstall --refresh-package ${QWENPAW_PACKAGE} ${QWENPAW_PACKAGE} --python $QWENPAW_VENV/bin/python"
+fi
+INSTALLED_VERSION="$VERIFY_OUTPUT"
+info "QwenPaw ${INSTALLED_VERSION} installed successfully (${QWENPAW_PACKAGE})"
+
+# Warn when a still-running server reports a different version than we installed.
+RUNNING_VERSION=""
+if command -v curl >/dev/null 2>&1; then
+    RUNNING_VERSION="$("$QWENPAW_VENV/bin/python" -c "
+import json, sys, urllib.request
+for url in ('http://127.0.0.1:8088/api/version', 'http://localhost:8088/api/version'):
+    try:
+        with urllib.request.urlopen(url, timeout=2) as resp:
+            body = json.load(resp)
+        print(body.get('version', '') or '')
+        break
+    except Exception:
+        pass
+" 2>/dev/null || true)"
+fi
+if [ -n "$RUNNING_VERSION" ] && [ "$RUNNING_VERSION" != "$INSTALLED_VERSION" ]; then
+    warn "Running QwenPaw server still reports ${RUNNING_VERSION} (installed: ${INSTALLED_VERSION})."
+    warn "Restart the service: qwenpaw shutdown && qwenpaw app"
+fi
 
 # Check console availability (for PyPI installs, check the installed package)
 if [ "$_CONSOLE_AVAILABLE" = 0 ]; then
@@ -373,4 +433,5 @@ printf "  ${BOLD}qwenpaw init${RESET}       # first-time setup\n"
 printf "  ${BOLD}qwenpaw app${RESET}        # start QwenPaw\n"
 echo ""
 printf "To upgrade later, re-run this installer.\n"
+printf "If the web UI still shows an old version, restart: ${BOLD}qwenpaw shutdown && qwenpaw app${RESET}\n"
 printf "To uninstall, run: ${BOLD}qwenpaw uninstall${RESET}\n"

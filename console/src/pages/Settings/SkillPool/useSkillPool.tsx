@@ -30,6 +30,7 @@ import {
 } from "../../Agent/Skills/components";
 import { useSkillFilter } from "../../Agent/Skills/useSkillFilter";
 import { useUploadLimitStore } from "../../../stores/uploadLimitStore";
+import { useAuthStore } from "../../../stores/authStore";
 
 export type PoolMode = "broadcast" | "create" | "edit";
 
@@ -167,6 +168,7 @@ export function useSkillPool() {
   const { showConflictRenameModal, conflictRenameModal } =
     useConflictRenameModal();
   const { message } = useAppMessage();
+  const canDeletePoolSkills = useAuthStore((state) => state.isAdminAccount());
   const [selectedPoolSkills, setSelectedPoolSkills] = useState<Set<string>>(
     new Set(),
   );
@@ -1029,6 +1031,10 @@ export function useSkillPool() {
   };
 
   const handleDelete = async (skill: PoolSkillSpec) => {
+    if (!canDeletePoolSkills) {
+      message.error(t("skillPool.adminDeleteRequired"));
+      return;
+    }
     Modal.confirm({
       title: t("skillPool.deleteTitle", { name: skill.name }),
       content: skill.external
@@ -1172,6 +1178,10 @@ export function useSkillPool() {
   };
 
   const handleBatchDeletePool = async () => {
+    if (!canDeletePoolSkills) {
+      message.error(t("skillPool.adminDeleteRequired"));
+      return;
+    }
     const names = Array.from(selectedPoolSkills);
     if (names.length === 0) return;
     const hasExternal = skills.some(
@@ -1254,6 +1264,7 @@ export function useSkillPool() {
     importing,
     selectedPoolSkills,
     batchModeEnabled,
+    canDeletePoolSkills,
     viewMode,
     filterOpen,
     searchQuery,

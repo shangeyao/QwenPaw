@@ -150,6 +150,36 @@ def test_list_pool_skills_returns_pool_specs(client):
     build_mock.assert_called_once()
 
 
+def test_delete_pool_skill_requires_admin(app):
+    @app.middleware("http")
+    async def inject_agent_scope(request, call_next):
+        request.state.auth_role = "agent"
+        request.state.auth_agent_id = "agent-a"
+        return await call_next(request)
+
+    with patch(
+        "qwenpaw.app.routers.skills.SkillPoolService",
+    ) as service_cls:
+        response = TestClient(app).delete("/api/skills/pool/demo-skill")
+
+    assert response.status_code == 403
+    service_cls.assert_not_called()
+
+
+def test_delete_pool_skill_allows_admin(client):
+    service = MagicMock()
+    service.delete_skill.return_value = True
+    with patch(
+        "qwenpaw.app.routers.skills.SkillPoolService",
+        return_value=service,
+    ):
+        response = client.delete("/api/skills/pool/demo-skill")
+
+    assert response.status_code == 200
+    assert response.json() == {"deleted": True}
+    service.delete_skill.assert_called_once_with("demo-skill")
+
+
 # ---------------------------------------------------------------------------
 # Hub install lifecycle
 # ---------------------------------------------------------------------------

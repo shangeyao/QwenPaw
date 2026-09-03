@@ -39,6 +39,7 @@ import {
   SparkOtherLine,
   SparkSaveLine,
   SparkScanLine,
+  SparkSearchUserLine,
   SparkToolLine,
   SparkUserGroupLine,
   SparkVoiceChat01Line,
@@ -216,6 +217,15 @@ export const BUILTIN_MENU: MenuItem[] = [
     icon: SparkAgentLine,
     route: "core.agents",
     order: 10,
+  },
+  {
+    id: "core.accounts",
+    location: "primary.settings",
+    parentId: "core.settings-group",
+    label: navLabel("nav.accounts"),
+    icon: SparkSearchUserLine,
+    route: "core.accounts",
+    order: 15,
   },
   {
     id: "core.models",

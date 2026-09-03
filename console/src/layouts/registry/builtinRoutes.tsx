@@ -45,6 +45,8 @@ const VoiceTranscriptionPage = lazyImportWithRetry(
   "../../pages/Settings/VoiceTranscription",
 );
 const AgentsPage = lazyImportWithRetry("../../pages/Settings/Agents");
+const AccountsPage = lazyImportWithRetry("../../pages/Settings/Accounts");
+const MyAccountPage = lazyImportWithRetry("../../pages/Settings/MyAccount");
 const DebugPage = lazyImportWithRetry("../../pages/Settings/Debug");
 const BackupsPage = lazyImportWithRetry("../../pages/Settings/Backups");
 const AppCenterPage = lazyImportWithRetry("../../pages/AppCenter");
@@ -80,6 +82,8 @@ export const BUILTIN_ROUTES: Route[] = [
   { id: "core.acp-alias", path: "/ACP", component: ACPRedirect },
   { id: "core.checkpoints", path: "/checkpoints", component: CheckpointsPage },
   { id: "core.agents", path: "/agents", component: AgentsPage },
+  { id: "core.accounts", path: "/accounts", component: AccountsPage },
+  { id: "core.my-account", path: "/my-account", component: MyAccountPage },
   { id: "core.models", path: "/models", component: ModelsPage },
   {
     id: "core.environments",

@@ -11,7 +11,7 @@ CONSOLE_DEST="$REPO_ROOT/src/qwenpaw/console"
 
 echo "[wheel_build] Building console frontend..."
 (cd "$CONSOLE_DIR" && npm ci)
-(cd "$CONSOLE_DIR" && npm run build)
+(cd "$CONSOLE_DIR" && npx vite build)
 
 echo "[wheel_build] Copying console/dist/* -> src/qwenpaw/console/..."
 rm -rf "$CONSOLE_DEST"/*

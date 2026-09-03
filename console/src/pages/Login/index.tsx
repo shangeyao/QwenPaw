@@ -13,15 +13,18 @@ import {
 } from "lucide-react";
 import { authApi } from "../../api/modules/auth";
 import { setAuthToken } from "../../api/config";
+import { applyAuthSession } from "../../stores/authStore";
 import { useTheme } from "../../contexts/ThemeContext";
 import { getPostLoginHref } from "../../utils/navigationMode";
 import styles from "./index.module.less";
+import { useAgentStore } from "../../stores/agentStore";
 
 export default function LoginPage() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { isDark } = useTheme();
+  const { setSelectedAgent } = useAgentStore();
   const [loading, setLoading] = useState(false);
   const [isRegister, setIsRegister] = useState(false);
   const [hasUsers, setHasUsers] = useState(true);
@@ -81,14 +84,26 @@ export default function LoginPage() {
         const res = await authApi.register(values.username, values.password);
         if (res.token) {
           setAuthToken(res.token);
+          applyAuthSession(res);
+          const target =
+            res.role === "agent" && res.agent_id ? "/chat" : redirect;
+          if (res.role === "agent" && res.agent_id) {
+            setSelectedAgent(res.agent_id);
+          }
           message.success(t("login.registerSuccess"));
-          finishNavigation(redirect);
+          finishNavigation(target);
         }
       } else {
         const res = await authApi.login(values.username, values.password);
         if (res.token) {
           setAuthToken(res.token);
-          finishNavigation(redirect);
+          applyAuthSession(res);
+          const target =
+            res.role === "agent" && res.agent_id ? "/chat" : redirect;
+          if (res.role === "agent" && res.agent_id) {
+            setSelectedAgent(res.agent_id);
+          }
+          finishNavigation(target);
         } else {
           message.info(t("login.authNotEnabled"));
           finishNavigation(redirect);

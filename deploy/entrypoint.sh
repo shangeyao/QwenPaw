@@ -6,11 +6,17 @@ set -e
 is_auth_enabled() {
   if [ "${QWENPAW_AUTH_ENABLED+x}" ]; then
     flag="${QWENPAW_AUTH_ENABLED}"
+  elif [ "${COPAW_AUTH_ENABLED+x}" ]; then
+    flag="${COPAW_AUTH_ENABLED}"
   else
-    flag="${COPAW_AUTH_ENABLED:-}"
+    flag="true"
   fi
   flag="$(printf '%s' "$flag" | tr '[:upper:]' '[:lower:]')"
-  [ "$flag" = "true" ] || [ "$flag" = "1" ] || [ "$flag" = "yes" ]
+  case "$flag" in
+    false|0|no) return 1 ;;
+    true|1|yes) return 0 ;;
+    *) return 0 ;;
+  esac
 }
 
 warn_if_auth_off_container_bind() {

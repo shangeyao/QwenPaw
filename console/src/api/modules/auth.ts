@@ -4,6 +4,8 @@ import { responseErrorMessage } from "../error";
 export interface LoginResponse {
   token: string;
   username: string;
+  role?: "admin" | "agent";
+  agent_id?: string | null;
   message?: string;
 }
 
@@ -13,6 +15,13 @@ export interface AuthStatusResponse {
   mode?: "hub";
   bootstrap_required?: boolean;
   registration_enabled?: boolean;
+}
+
+export interface AuthVerifyResponse {
+  valid: boolean;
+  username: string;
+  role?: "admin" | "agent";
+  agent_id?: string | null;
 }
 
 export const authApi = {
@@ -46,6 +55,18 @@ export const authApi = {
   getStatus: async (): Promise<AuthStatusResponse> => {
     const res = await fetch(getApiUrl("/auth/status"));
     if (!res.ok) throw new Error("Failed to check auth status");
+    return res.json();
+  },
+
+  verify: async (): Promise<AuthVerifyResponse> => {
+    const token = localStorage.getItem("qwenpaw_auth_token") || "";
+    const res = await fetch(getApiUrl("/auth/verify"), {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Token verification failed");
+    }
     return res.json();
   },
 

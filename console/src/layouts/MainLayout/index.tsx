@@ -1,6 +1,12 @@
 import { Suspense, useMemo } from "react";
 import { Layout, Spin } from "antd";
-import { Routes, Route, useLocation, matchPath } from "react-router-dom";
+import {
+  Routes,
+  Route,
+  useLocation,
+  matchPath,
+  Navigate,
+} from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import Sidebar from "../Sidebar";
 import Header from "../Header";
@@ -8,6 +14,8 @@ import ConsolePollService from "../../components/ConsolePollService";
 import { AgentStatusPollingController } from "../../components/AgentStatusPollingController";
 import { ChunkErrorBoundary } from "../../components/ChunkErrorBoundary";
 import { useSyncCodingMode } from "../../stores/useSyncCodingMode";
+import { useAuthStore } from "../../stores/authStore";
+import { isAdminOnlyRoute } from "../../utils/authScope";
 import styles from "../index.module.less";
 import { useRoutes } from "../../plugins/registry/hooks";
 import { Slot } from "../../plugins/registry/Slot";
@@ -36,9 +44,10 @@ export default function MainLayout({ hubMode = false }: { hubMode?: boolean }) {
   const location = useLocation();
   const currentPath = location.pathname;
   const routes = useRoutes();
+  const isAgentAccount = useAuthStore(
+    (state) => state.session?.role === "agent",
+  );
 
-  // Backend is the source of truth for Coding Mode state — refill the
-  // in-memory store every time the selected agent changes.
   useSyncCodingMode();
 
   const selectedKey = useMemo(
@@ -55,6 +64,10 @@ export default function MainLayout({ hubMode = false }: { hubMode?: boolean }) {
     () => routes.filter((r) => !/^\/apps\/(?!:)/.test(r.path)),
     [routes],
   );
+
+  if (isAgentAccount && isAdminOnlyRoute(currentPath)) {
+    return <Navigate to="/chat" replace />;
+  }
 
   return (
     <Layout className={styles.mainLayout}>

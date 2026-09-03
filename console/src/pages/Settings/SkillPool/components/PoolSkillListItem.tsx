@@ -22,6 +22,7 @@ interface PoolSkillListItemProps {
   onEdit: (skill: PoolSkillSpec) => void;
   onBroadcast: (skill: PoolSkillSpec) => void;
   onDelete: (skill: PoolSkillSpec) => void;
+  canDelete?: boolean;
 }
 
 export function PoolSkillListItem({
@@ -32,6 +33,7 @@ export function PoolSkillListItem({
   onEdit,
   onBroadcast,
   onDelete,
+  canDelete = true,
 }: PoolSkillListItemProps) {
   const { t } = useTranslation();
   const isBuiltin = isSkillBuiltin(skill.source);
@@ -114,17 +116,19 @@ export function PoolSkillListItem({
         >
           {t("skillPool.broadcast")}
         </Button>
-        <Button
-          danger
-          className={styles.deleteButton}
-          disabled={batchModeEnabled}
-          onClick={(e) => {
-            e.stopPropagation();
-            void onDelete(skill);
-          }}
-        >
-          {t("skillPool.delete")}
-        </Button>
+        {canDelete && (
+          <Button
+            danger
+            className={styles.deleteButton}
+            disabled={batchModeEnabled}
+            onClick={(e) => {
+              e.stopPropagation();
+              void onDelete(skill);
+            }}
+          >
+            {t("skillPool.delete")}
+          </Button>
+        )}
       </div>
     </div>
   );

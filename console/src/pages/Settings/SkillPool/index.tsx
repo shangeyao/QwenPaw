@@ -75,13 +75,15 @@ function SkillPoolPage() {
                 >
                   {t("skills.clearSelection")}
                 </Button>
-                <Button
-                  danger
-                  icon={<DeleteOutlined />}
-                  onClick={pool.handleBatchDeletePool}
-                >
-                  {t("common.delete")} ({pool.selectedPoolSkills.size})
-                </Button>
+                {pool.canDeletePoolSkills && (
+                  <Button
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={pool.handleBatchDeletePool}
+                  >
+                    {t("common.delete")} ({pool.selectedPoolSkills.size})
+                  </Button>
+                )}
                 <Button type="primary" onClick={pool.toggleBatchMode}>
                   {t("skills.exitBatch")}
                 </Button>
@@ -136,9 +138,11 @@ function SkillPoolPage() {
                   </Tooltip>
                 </div>
                 <div className={styles.headerActionsRight}>
-                  <Button type="primary" onClick={pool.toggleBatchMode}>
-                    {t("skills.batchOperation")}
-                  </Button>
+                  {pool.canDeletePoolSkills && (
+                    <Button type="primary" onClick={pool.toggleBatchMode}>
+                      {t("skills.batchOperation")}
+                    </Button>
+                  )}
                   <AddSkillDropdown
                     onCreate={pool.openCreate}
                     onUploadZip={() => pool.zipInputRef.current?.click()}
@@ -242,6 +246,8 @@ function SkillPoolPage() {
                 onBroadcast={pool.openBroadcast}
                 onDelete={pool.handleDelete}
                 onAutomationQuickAction={pool.handleAutomationQuickAction}
+                canDelete={pool.canDeletePoolSkills}
+                onToggleAutoUpdate={pool.handleToggleAutoUpdate}
               />
             ))}
             {hasMore && <div ref={sentinelRef} style={{ height: 1 }} />}
@@ -258,6 +264,7 @@ function SkillPoolPage() {
                 onEdit={pool.openEdit}
                 onBroadcast={pool.openBroadcast}
                 onDelete={pool.handleDelete}
+                canDelete={pool.canDeletePoolSkills}
               />
             ))}
             {hasMore && <div ref={sentinelRef} style={{ height: 1 }} />}

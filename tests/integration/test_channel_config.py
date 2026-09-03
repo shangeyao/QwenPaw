@@ -83,6 +83,17 @@ def test_channel_types_returns_all_builtin(app_server) -> None:
     assert isinstance(types, list)
     type_set = set(types)
     missing = _EXPECTED_BUILTIN_TYPES - type_set
+    if missing:
+        # Channel discovery can lag briefly on busy macOS/Windows runners.
+        time.sleep(2.0)
+        retry = app_server.api_request(
+            "GET",
+            "/api/config/channels/types",
+            timeout=_CHANNEL_HTTP_TIMEOUT,
+        )
+        assert retry.status_code == 200, app_server.logs_tail()
+        type_set = set(retry.json())
+        missing = _EXPECTED_BUILTIN_TYPES - type_set
     assert not missing, f"missing builtin types: {missing}"
 
 

@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import type { AgentSummary } from "../api/types/agents";
 import { agentsApi } from "../api/modules/agents";
 import { menuRegistry } from "../plugins/registry/store";
+import { useAuthStore } from "./authStore";
 
 /**
  * Storage key used by both sessionStorage (per-tab state) and localStorage
@@ -86,6 +87,10 @@ export const useAgentStore = create<AgentStore>()(
       lastChatIdByAgent: {},
 
       setSelectedAgent: (agentId) => {
+        const boundAgentId = useAuthStore.getState().boundAgentId();
+        if (boundAgentId && agentId !== boundAgentId) {
+          return;
+        }
         set({ selectedAgent: agentId });
         menuRegistry.refresh();
         // Persist to localStorage so new tabs inherit this choice

@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """Authentication module: password hashing, JWT tokens, and FastAPI middleware.
 
-Login is disabled by default and only enabled when the environment
-variable ``QWENPAW_AUTH_ENABLED`` is set to a truthy value (``true``,
-``1``, ``yes``).  Credentials are created through a web-based
+Login is enabled by default.  Set ``QWENPAW_AUTH_ENABLED`` to ``false``,
+``0``, or ``no`` to disable it.  Credentials are created through a web-based
 registration flow rather than environment variables, so that agents
 running inside the process cannot read plaintext passwords.
 
@@ -15,6 +14,7 @@ Uses only Python stdlib (hashlib, hmac, secrets) to avoid adding new
 dependencies.  The password is stored as a salted SHA-256 hash in
 ``auth.json`` under ``SECRET_DIR``.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -26,7 +26,7 @@ import os
 import re
 import secrets
 import time
-from typing import Optional
+from typing import Optional, TypedDict
 
 from fastapi import Request, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -39,6 +39,7 @@ from ..security.secret_store import (
     encrypt_dict_fields,
     is_encrypted,
 )
+from .auth_scope import is_pool_delete_request
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,14 @@ def verify_password(password: str, stored_hash: str, salt: str) -> bool:
     return hmac.compare_digest(h, stored_hash)
 
 
+class AuthPrincipal(TypedDict, total=False):
+    """Authenticated web-console principal encoded in a token."""
+
+    username: str
+    role: str
+    agent_id: str | None
+
+
 # ---------------------------------------------------------------------------
 # Token generation / verification (HMAC-SHA256, no PyJWT needed)
 # ---------------------------------------------------------------------------
@@ -134,7 +143,13 @@ def _get_jwt_secret() -> str:
     return secret
 
 
-def create_token(username: str, expiry_seconds: Optional[int] = None) -> str:
+def create_token(
+    username: str,
+    expiry_seconds: Optional[int] = None,
+    *,
+    role: str = "admin",
+    agent_id: str | None = None,
+) -> str:
     """Create an HMAC-signed token: ``base64(payload).signature``.
 
     Args:
@@ -160,6 +175,8 @@ def create_token(username: str, expiry_seconds: Optional[int] = None) -> str:
     payload = json.dumps(
         {
             "sub": username,
+            "role": role,
+            "agent_id": agent_id,
             "exp": int(time.time()) + expiry_seconds,
             "iat": int(time.time()),
             "jti": token_id,  # JWT ID for individual revocation
@@ -174,8 +191,8 @@ def create_token(username: str, expiry_seconds: Optional[int] = None) -> str:
     return f"{payload_b64}.{sig}"
 
 
-def verify_token(token: str) -> Optional[str]:
-    """Verify *token*, return username if valid, ``None`` otherwise.
+def verify_token_payload(token: str) -> Optional[dict]:
+    """Verify *token*, return decoded payload if valid, ``None`` otherwise.
 
     Also checks if the token has been revoked (appears in the revocation list).
     """
@@ -203,10 +220,37 @@ def verify_token(token: str) -> Optional[str]:
         if jti and _is_token_revoked(jti):
             return None
 
-        return payload.get("sub")
+        return payload
     except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
         logger.debug("Token verification failed: %s", exc)
         return None
+
+
+def verify_token(token: str) -> Optional[str]:
+    """Verify *token*, return username if valid, ``None`` otherwise."""
+    payload = verify_token_payload(token)
+    if payload is None:
+        return None
+    return payload.get("sub")
+
+
+def verify_token_principal(token: str) -> Optional[AuthPrincipal]:
+    """Verify *token* and return role/scope information."""
+    payload = verify_token_payload(token)
+    if payload is None:
+        return None
+    username = payload.get("sub")
+    if not isinstance(username, str) or not username:
+        return None
+    role = payload.get("role") or "admin"
+    agent_id = payload.get("agent_id")
+    if role == "agent" and not isinstance(agent_id, str):
+        return None
+    return {
+        "username": username,
+        "role": role,
+        "agent_id": agent_id if isinstance(agent_id, str) else None,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -340,12 +384,16 @@ def _clean_expired_revocations() -> None:
 def is_auth_enabled() -> bool:
     """Check whether authentication is enabled via environment variable.
 
-    Returns ``True`` when ``QWENPAW_AUTH_ENABLED`` is set to a truthy
-    value (``true``, ``1``, ``yes``).  The presence of a registered
+    Authentication is enabled by default.  Set ``QWENPAW_AUTH_ENABLED`` to
+    ``false``, ``0``, or ``no`` to disable it.  The presence of a registered
     user is checked separately by the middleware so that the first
     user can still reach the registration page.
     """
-    env_flag = EnvVarLoader.get_str("QWENPAW_AUTH_ENABLED", "").strip().lower()
+    env_flag = (
+        EnvVarLoader.get_str("QWENPAW_AUTH_ENABLED", "true").strip().lower()
+    )
+    if env_flag in ("false", "0", "no"):
+        return False
     return env_flag in ("true", "1", "yes")
 
 
@@ -353,6 +401,262 @@ def has_registered_users() -> bool:
     """Return ``True`` if a user has been registered."""
     data = _load_auth_data()
     return bool(data.get("user"))
+
+
+def _get_agent_users(data: dict | None = None) -> dict:
+    """Return the agent-scoped account mapping from auth data."""
+    if data is None:
+        data = _load_auth_data()
+    users = data.get("agent_users", {})
+    return users if isinstance(users, dict) else {}
+
+
+def _find_agent_user(
+    data: dict,
+    username: str,
+) -> tuple[str, dict] | tuple[None, None]:
+    """Find an agent account by username."""
+    for agent_id, user in _get_agent_users(data).items():
+        if isinstance(user, dict) and user.get("username") == username:
+            return agent_id, user
+    return None, None
+
+
+def _username_in_use(
+    data: dict,
+    username: str,
+    *,
+    excluding_agent_id: str | None = None,
+) -> bool:
+    admin_user = data.get("user") or {}
+    if admin_user.get("username") == username:
+        return True
+    for agent_id, user in _get_agent_users(data).items():
+        if agent_id == excluding_agent_id:
+            continue
+        if isinstance(user, dict) and user.get("username") == username:
+            return True
+    return False
+
+
+def get_agent_account(agent_id: str) -> dict | None:
+    """Return non-secret account metadata for an agent."""
+    user = _get_agent_users().get(agent_id)
+    if not isinstance(user, dict):
+        return None
+    username = user.get("username")
+    if not isinstance(username, str) or not username:
+        return None
+    return {"username": username}
+
+
+def set_agent_credentials(
+    agent_id: str,
+    username: str | None = None,
+    password: str | None = None,
+) -> None:
+    """Create or update credentials for one agent.
+
+    The username is globally unique across the admin account and all
+    agent-scoped accounts.  A password is required when creating a new
+    agent account; on later edits it is optional.
+    """
+    username = username.strip() if username is not None else None
+    password = password if password is not None else None
+    if username is not None and not username:
+        raise ValueError("Username cannot be empty")
+    if password is not None and not password.strip():
+        raise ValueError("Password cannot be empty")
+
+    data = _load_auth_data()
+    if data.get("_auth_load_error"):
+        raise ValueError("Failed to load auth data")
+
+    agent_users = _get_agent_users(data)
+    existing = agent_users.get(agent_id)
+    if existing is not None and not isinstance(existing, dict):
+        existing = None
+
+    target_username = username or (
+        existing.get("username") if existing else None
+    )
+    if not target_username:
+        raise ValueError("Username is required")
+    if existing is None and password is None:
+        raise ValueError("Password is required for new agent account")
+    if _username_in_use(
+        data,
+        target_username,
+        excluding_agent_id=agent_id,
+    ):
+        raise ValueError("Username already exists")
+
+    next_user = dict(existing or {})
+    next_user["username"] = target_username
+    if password is not None:
+        pw_hash, salt = _hash_password(password)
+        next_user["password_hash"] = pw_hash
+        next_user["password_salt"] = salt
+    agent_users[agent_id] = next_user
+    data["agent_users"] = agent_users
+    _save_auth_data(data)
+    logger.info("Agent-scoped credentials updated for '%s'", agent_id)
+
+
+def delete_agent_credentials(agent_id: str) -> None:
+    """Remove credentials for an agent if present."""
+    data = _load_auth_data()
+    agent_users = _get_agent_users(data)
+    if agent_id in agent_users:
+        del agent_users[agent_id]
+        data["agent_users"] = agent_users
+        _save_auth_data(data)
+        logger.info("Agent-scoped credentials deleted for '%s'", agent_id)
+
+
+def list_web_accounts() -> list[dict]:
+    """Return metadata for all web login accounts."""
+    data = _load_auth_data()
+    if data.get("_auth_load_error"):
+        raise ValueError("Failed to load auth data")
+
+    accounts: list[dict] = []
+    admin = data.get("user")
+    if isinstance(admin, dict) and admin.get("username"):
+        accounts.append(
+            {
+                "username": admin["username"],
+                "role": "admin",
+                "agent_id": None,
+            },
+        )
+
+    for agent_id, user in _get_agent_users(data).items():
+        if isinstance(user, dict) and user.get("username"):
+            accounts.append(
+                {
+                    "username": user["username"],
+                    "role": "agent",
+                    "agent_id": agent_id,
+                },
+            )
+    return accounts
+
+
+def get_account_role(username: str) -> str | None:
+    """Return ``admin``, ``agent``, or ``None`` for unknown usernames."""
+    data = _load_auth_data()
+    admin = data.get("user") or {}
+    if admin.get("username") == username:
+        return "admin"
+    agent_id, _ = _find_agent_user(data, username)
+    return "agent" if agent_id else None
+
+
+def create_agent_account(
+    username: str,
+    password: str,
+    agent_id: str,
+) -> None:
+    """Create a web login account bound to one agent."""
+    username = username.strip()
+    password = password.strip()
+    agent_id = agent_id.strip()
+    if not username:
+        raise ValueError("Username is required")
+    if not password:
+        raise ValueError("Password is required")
+    if not agent_id:
+        raise ValueError("Agent is required")
+
+    from ..config.utils import load_config
+
+    config = load_config()
+    if agent_id not in config.agents.profiles:
+        raise ValueError(f"Agent '{agent_id}' not found")
+    if get_agent_account(agent_id):
+        raise ValueError("This agent already has a web login account")
+
+    set_agent_credentials(agent_id, username=username, password=password)
+
+
+def update_agent_account(
+    username: str,
+    *,
+    new_username: str | None = None,
+    password: str | None = None,
+    agent_id: str | None = None,
+) -> None:
+    """Update an existing agent-scoped account."""
+    data = _load_auth_data()
+    if data.get("_auth_load_error"):
+        raise ValueError("Failed to load auth data")
+
+    current_agent_id, user = _find_agent_user(data, username)
+    if not current_agent_id or not isinstance(user, dict):
+        raise ValueError("Account not found")
+
+    next_username = (
+        new_username.strip()
+        if isinstance(new_username, str) and new_username.strip()
+        else user.get("username")
+    )
+    if not next_username:
+        raise ValueError("Username cannot be empty")
+
+    next_agent_id = (
+        agent_id.strip()
+        if isinstance(agent_id, str) and agent_id.strip()
+        else current_agent_id
+    )
+    if not next_agent_id:
+        raise ValueError("Agent is required")
+
+    from ..config.utils import load_config
+
+    config = load_config()
+    if next_agent_id not in config.agents.profiles:
+        raise ValueError(f"Agent '{next_agent_id}' not found")
+
+    agent_users = _get_agent_users(data)
+    if next_agent_id != current_agent_id and next_agent_id in agent_users:
+        raise ValueError("Target agent already has a web login account")
+
+    if _username_in_use(
+        data,
+        next_username,
+        excluding_agent_id=current_agent_id,
+    ):
+        raise ValueError("Username already exists")
+
+    next_user = dict(user)
+    next_user["username"] = next_username
+    if password is not None:
+        if not password.strip():
+            raise ValueError("Password cannot be empty")
+        pw_hash, salt = _hash_password(password)
+        next_user["password_hash"] = pw_hash
+        next_user["password_salt"] = salt
+
+    if next_agent_id != current_agent_id:
+        del agent_users[current_agent_id]
+    agent_users[next_agent_id] = next_user
+    data["agent_users"] = agent_users
+    _save_auth_data(data)
+    logger.info(
+        "Agent account '%s' updated (agent=%s)",
+        next_username,
+        next_agent_id,
+    )
+
+
+def delete_agent_account(username: str) -> None:
+    """Delete an agent-scoped account by username."""
+    data = _load_auth_data()
+    agent_id, user = _find_agent_user(data, username)
+    if not agent_id or not isinstance(user, dict):
+        raise ValueError("Account not found")
+    delete_agent_credentials(agent_id)
 
 
 # ---------------------------------------------------------------------------
@@ -457,7 +761,10 @@ def update_credentials(
         return None
 
     if new_username and new_username.strip():
-        user["username"] = new_username.strip()
+        next_username = new_username.strip()
+        if _find_agent_user(data, next_username)[0]:
+            return None
+        user["username"] = next_username
 
     if new_password:
         pw_hash, salt = _hash_password(new_password)
@@ -470,6 +777,75 @@ def update_credentials(
     _save_auth_data(data)
     logger.info("Credentials updated for user '%s'", user["username"])
     return create_token(user["username"], expiry_seconds)
+
+
+def update_agent_credentials_self(
+    username: str,
+    *,
+    current_password: str,
+    new_username: str | None = None,
+    new_password: str | None = None,
+    expiry_seconds: Optional[int] = None,
+) -> Optional[str]:
+    """Update an agent account's own username and/or password.
+
+    Requires the current password for verification.  The bound agent cannot
+    be changed here — use admin account management for rebinding.
+
+    Returns a new token on success, or ``None`` if verification fails.
+    """
+    data = _load_auth_data()
+    if data.get("_auth_load_error"):
+        return None
+
+    agent_id, user = _find_agent_user(data, username)
+    if not agent_id or not isinstance(user, dict):
+        return None
+
+    stored_hash = user.get("password_hash", "")
+    stored_salt = user.get("password_salt", "")
+    if not verify_password(current_password, stored_hash, stored_salt):
+        return None
+
+    next_username = (
+        new_username.strip()
+        if isinstance(new_username, str) and new_username.strip()
+        else user.get("username")
+    )
+    if not isinstance(next_username, str) or not next_username:
+        raise ValueError("Username cannot be empty")
+
+    if _username_in_use(
+        data,
+        next_username,
+        excluding_agent_id=agent_id,
+    ):
+        raise ValueError("Username already exists")
+
+    next_user = dict(user)
+    next_user["username"] = next_username
+    if new_password is not None:
+        if not new_password.strip():
+            raise ValueError("Password cannot be empty")
+        pw_hash, salt = _hash_password(new_password)
+        next_user["password_hash"] = pw_hash
+        next_user["password_salt"] = salt
+
+    agent_users = _get_agent_users(data)
+    agent_users[agent_id] = next_user
+    data["agent_users"] = agent_users
+    _save_auth_data(data)
+    logger.info(
+        "Agent account '%s' updated credentials (agent=%s)",
+        next_username,
+        agent_id,
+    )
+    return create_token(
+        next_username,
+        expiry_seconds,
+        role="agent",
+        agent_id=agent_id,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -491,18 +867,31 @@ def authenticate(
     """
     data = _load_auth_data()
     user = data.get("user")
-    if not user:
-        return None
-    if user.get("username") != username:
-        return None
-    stored_hash = user.get("password_hash", "")
-    stored_salt = user.get("password_salt", "")
-    if (
-        stored_hash
-        and stored_salt
-        and verify_password(password, stored_hash, stored_salt)
-    ):
-        return create_token(username, expiry_seconds)
+    if user and user.get("username") == username:
+        stored_hash = user.get("password_hash", "")
+        stored_salt = user.get("password_salt", "")
+        if (
+            stored_hash
+            and stored_salt
+            and verify_password(password, stored_hash, stored_salt)
+        ):
+            return create_token(username, expiry_seconds, role="admin")
+
+    agent_id, agent_user = _find_agent_user(data, username)
+    if agent_id and agent_user:
+        stored_hash = agent_user.get("password_hash", "")
+        stored_salt = agent_user.get("password_salt", "")
+        if (
+            stored_hash
+            and stored_salt
+            and verify_password(password, stored_hash, stored_salt)
+        ):
+            return create_token(
+                username,
+                expiry_seconds,
+                role="agent",
+                agent_id=agent_id,
+            )
     return None
 
 
@@ -706,15 +1095,23 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 media_type="application/json",
             )
 
-        user = verify_token(token)
-        if user is None:
+        principal = verify_token_principal(token)
+        if principal is None:
             return Response(
                 content='{"detail":"Invalid or expired token"}',
                 status_code=401,
                 media_type="application/json",
             )
 
-        request.state.user = user
+        request.state.user = principal["username"]
+        request.state.auth_role = principal.get("role", "admin")
+        request.state.auth_agent_id = principal.get("agent_id")
+        if not self._is_agent_scope_allowed(request, principal):
+            return Response(
+                content=json.dumps({"detail": "Forbidden for this agent"}),
+                status_code=403,
+                media_type="application/json",
+            )
         return await call_next(request)
 
     @staticmethod
@@ -765,6 +1162,73 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if "upgrade" in conn.lower():
             return request.query_params.get("token")
         return request.query_params.get("token") or None
+
+    @staticmethod
+    def _is_agent_scope_allowed(  # pylint: disable=too-many-return-statements
+        request: Request,
+        principal: AuthPrincipal,
+    ) -> bool:
+        """Return whether an agent-scoped user may access this request."""
+        if principal.get("role") != "agent":
+            return True
+
+        allowed_agent = principal.get("agent_id")
+        if not allowed_agent:
+            return False
+
+        path = request.url.path
+        method = request.method.upper()
+        path_parts = path.split("/")
+
+        if path == "/api/auth/update-profile":
+            return method == "POST"
+        if path in {"/api/auth/verify", "/api/auth/revoke-token"}:
+            return True
+
+        # Agent users may see only their own row in /api/agents and may
+        # read/update their own agent config.  Creating, deleting, ordering,
+        # and toggling agents stays admin-only.
+        if path == "/api/agents":
+            return method == "GET"
+        if len(path_parts) >= 4 and path_parts[1:3] == ["api", "agents"]:
+            path_agent_id = path_parts[3]
+            if path_agent_id != allowed_agent:
+                return False
+            if len(path_parts) == 4:
+                return method in {"GET", "PUT"}
+            if len(path_parts) == 5 and path_parts[4] == "toggle":
+                return False
+            allowed_scoped_prefixes = {
+                "agent-status",
+                "chats",
+                "config",
+                "console",
+                "cron",
+                "mcp",
+                "mcp-oauth",
+                "plan",
+                "skills",
+                "tools",
+                "workspace",
+            }
+            if is_pool_delete_request(path, method):
+                return False
+            return (
+                len(path_parts) >= 5
+                and path_parts[4] in allowed_scoped_prefixes
+            )
+
+        # Chat attachments and tool-sent files are previewed via the global
+        # /api/files/preview route (token in query string for <img> tags).
+        if path.startswith("/api/files/preview/"):
+            return method in {"GET", "HEAD"}
+
+        header_agent_id = request.headers.get("X-Agent-Id")
+        if header_agent_id:
+            return header_agent_id == allowed_agent
+
+        # Non-agent-scoped mutating/global API access is reserved for admins.
+        return False
 
 
 class RuntimeBoundaryMiddleware:

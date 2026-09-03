@@ -138,13 +138,13 @@ These timeouts count only time spent waiting for the upstream stream, excluding 
 
 **Security & Authentication:**
 
-| Variable                     | Default | Description                                        |
-| ---------------------------- | ------- | -------------------------------------------------- |
-| `QWENPAW_AUTH_ENABLED`       | `false` | Whether to enable Web console login authentication |
-| `QWENPAW_AUTH_USERNAME`      | -       | Admin username for auto-registration (optional)    |
-| `QWENPAW_AUTH_PASSWORD`      | -       | Admin password for auto-registration (optional)    |
-| `QWENPAW_TOOL_GUARD_ENABLED` | `true`  | Whether to enable tool guard                       |
-| `QWENPAW_SKILL_SCAN_MODE`    | `warn`  | Skill scanning mode (`block` / `warn` / `off`)     |
+| Variable                     | Default | Description                                                                            |
+| ---------------------------- | ------- | -------------------------------------------------------------------------------------- |
+| `QWENPAW_AUTH_ENABLED`       | `true`  | Whether to enable Web console login authentication. Set to `false`/`0`/`no` to disable |
+| `QWENPAW_AUTH_USERNAME`      | -       | Admin username for auto-registration (optional)                                        |
+| `QWENPAW_AUTH_PASSWORD`      | -       | Admin password for auto-registration (optional)                                        |
+| `QWENPAW_TOOL_GUARD_ENABLED` | `true`  | Whether to enable tool guard                                                           |
+| `QWENPAW_SKILL_SCAN_MODE`    | `warn`  | Skill scanning mode (`block` / `warn` / `off`)                                         |
 
 Example — use a different working dir for this shell:
 

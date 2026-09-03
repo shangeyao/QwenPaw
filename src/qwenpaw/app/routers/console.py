@@ -31,6 +31,11 @@ from qwenpaw.utils.timeout import resolve_stream_task_timeout
 from ...utils.logging import LOG_FILE_PATH, sanitize_log_value
 from ..agent_context import get_agent_for_request
 from ..approvals.display import approval_display_fields
+from ..auth_scope import (
+    approval_belongs_to_agent,
+    get_request_agent_scope,
+    require_agent_event_access,
+)
 from ..chats.title_generator import generate_and_update_title
 from ..utils import check_upload_size
 
@@ -590,6 +595,7 @@ async def get_backend_debug_logs(
 
 @router.get("/push-messages")
 async def get_push_messages(
+    request: Request,
     session_id: str | None = Query(None, description="Optional session id"),
 ):
     """
@@ -607,17 +613,29 @@ async def get_push_messages(
     from ..console_push_store import get_recent, take
     from ..approvals import get_approval_service
 
+    scoped_agent = get_request_agent_scope(request)
+
     # Get messages (session-specific or global)
     if session_id:
         messages = await take(session_id)
+    elif scoped_agent:
+        # Global push bubbles are not agent-tagged; agent accounts only
+        # receive inbox events scoped on the dedicated inbox endpoints.
+        messages = []
     else:
         messages = await get_recent()
 
-    # Get ALL pending approvals (not filtered by session)
+    # Get pending approvals, scoped to the authenticated agent when needed.
     approval_svc = get_approval_service()
     # pylint: disable=protected-access
     async with approval_svc._lock:
         all_pending = list(approval_svc._pending.values())
+    if scoped_agent:
+        all_pending = [
+            pending
+            for pending in all_pending
+            if approval_belongs_to_agent(pending, scoped_agent)
+        ]
 
     # Serialize approval data with root_session_id for frontend filtering
     approvals_data = [
@@ -647,6 +665,7 @@ async def get_push_messages(
 
 @router.get("/inbox/events")
 async def get_inbox_events(
+    request: Request,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     source_type: str | None = Query(None),
@@ -657,6 +676,9 @@ async def get_inbox_events(
 ):
     from ..inbox_store import query_events
 
+    scoped_agent = get_request_agent_scope(request)
+    effective_agent_id = scoped_agent or agent_id
+
     selected_sources = set(source_types or [])
     if source_type:
         selected_sources.add(source_type)
@@ -665,7 +687,7 @@ async def get_inbox_events(
         offset=offset,
         source_types=selected_sources or None,
         status=status,
-        agent_id=agent_id,
+        agent_id=effective_agent_id,
         unread_only=unread_only,
     )
     return {
@@ -676,24 +698,32 @@ async def get_inbox_events(
 
 
 @router.post("/inbox/read")
-async def post_mark_inbox_read(payload: MarkInboxReadRequest):
+async def post_mark_inbox_read(
+    request: Request,
+    payload: MarkInboxReadRequest,
+):
     from ..inbox_store import mark_all_read, mark_read
 
+    scoped_agent = get_request_agent_scope(request)
+
     if payload.all:
-        updated = await mark_all_read()
+        updated = await mark_all_read(agent_id=scoped_agent)
     else:
-        updated = await mark_read(payload.event_ids)
+        updated = await mark_read(payload.event_ids, agent_id=scoped_agent)
     return {"updated": updated}
 
 
 @router.delete("/inbox/events/{event_id}")
-async def delete_inbox_event(event_id: str):
-    from ..inbox_store import delete_event
+async def delete_inbox_event(request: Request, event_id: str):
+    from ..inbox_store import delete_event, get_event
     from ..inbox_trace_store import delete_trace
 
-    deleted, run_id, run_id_still_referenced = await delete_event(event_id)
-    if not deleted:
+    event = await get_event(event_id)
+    if event is None:
         raise HTTPException(status_code=404, detail="event not found")
+    require_agent_event_access(request, event)
+
+    _deleted, run_id, run_id_still_referenced = await delete_event(event_id)
     trace_deleted = False
     if run_id and not run_id_still_referenced:
         trace_deleted = await delete_trace(run_id)

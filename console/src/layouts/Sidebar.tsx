@@ -31,6 +31,8 @@ import SidebarSessionList from "./SidebarSessionList";
 import SidebarSettingsPanel from "./SidebarSettingsPanel";
 import { clearAuthToken } from "../api/config";
 import { authApi } from "../api/modules/auth";
+import { useAuthStore } from "../stores/authStore";
+import { belongsToBoundAgent } from "../utils/authScope";
 import api from "../api";
 import {
   syncSessionsGlobal,
@@ -150,6 +152,9 @@ export default function Sidebar({
   const [wobbleEnabled] = useInboxWobble();
   const currentApprovalIdsRef = useRef<Set<string>>(new Set());
   const seenApprovalIdsRef = useRef<Set<string>>(new Set());
+  const isAgentAccount = useAuthStore(
+    (state) => state.session?.role === "agent",
+  );
 
   // Sidebar mode: "simple" (only core items) or "full" (everything)
   const { mode: sidebarMode } = useSidebarModeStore();
@@ -184,13 +189,14 @@ export default function Sidebar({
       ? flattenMenuForSimpleMode(visibleMenu)
       : visibleMenu;
   }, [backendCapabilities, rawAgentMenu, sidebarMode]);
-  const settingsMenu = useMemo(
-    () =>
-      sidebarMode === "simple"
-        ? flattenMenuForSimpleMode(rawSettingsMenu)
-        : rawSettingsMenu,
-    [rawSettingsMenu, sidebarMode],
-  );
+  const settingsMenu = useMemo(() => {
+    if (isAgentAccount) {
+      return [];
+    }
+    return sidebarMode === "simple"
+      ? flattenMenuForSimpleMode(rawSettingsMenu)
+      : rawSettingsMenu;
+  }, [isAgentAccount, rawSettingsMenu, sidebarMode]);
 
   // Flat nav entries for simple mode (icon + label + path)
   const simpleFlatNav = useMemo(() => {
@@ -249,17 +255,27 @@ export default function Sidebar({
   useEffect(() => {
     const loadUnreadState = async () => {
       try {
+        const boundAgentId = useAuthStore.getState().boundAgentId();
         const [inboxRes, pushRes] = await Promise.all([
           api.getInboxEvents({
             unread_only: true,
             limit: 1,
+            ...(boundAgentId ? { agent_id: boundAgentId } : {}),
           }),
           api.getPushMessages(),
         ]);
         const hasUnreadEvents = (inboxRes?.events?.length || 0) > 0;
-        const approvals = pushRes?.pending_approvals || [];
+        const pendingApprovals = pushRes?.pending_approvals || [];
+        const scopedApprovals = boundAgentId
+          ? pendingApprovals.filter((approval) =>
+              belongsToBoundAgent(
+                approval.owner_agent_id || approval.agent_id,
+                boundAgentId,
+              ),
+            )
+          : pendingApprovals;
         const currentIds = new Set(
-          approvals.map((a: { request_id: string }) => a.request_id),
+          scopedApprovals.map((a: { request_id: string }) => a.request_id),
         );
         currentApprovalIdsRef.current = currentIds;
         const hasNewApprovals =
@@ -794,15 +810,17 @@ export default function Sidebar({
           </div>
 
           {/* Global settings section */}
-          <Menu
-            mode="inline"
-            selectedKeys={[selectedKey]}
-            openKeys={openKeys}
-            onClick={({ key }) => handleMenuClick(String(key), settingsMenu)}
-            items={settingsMenuItems}
-            theme={isDark ? "dark" : "light"}
-            className={styles.sideMenu}
-          />
+          {settingsMenu.length > 0 && (
+            <Menu
+              mode="inline"
+              selectedKeys={[selectedKey]}
+              openKeys={openKeys}
+              onClick={({ key }) => handleMenuClick(String(key), settingsMenu)}
+              items={settingsMenuItems}
+              theme={isDark ? "dark" : "light"}
+              className={styles.sideMenu}
+            />
+          )}
           <Slot name="sider.bottom" kind="fill" />
         </>
       )}
@@ -820,20 +838,46 @@ export default function Sidebar({
               {t("hub.brand.title")}
             </Button>
           )}
-          <Button
-            type="text"
-            icon={<SparkSearchUserLine size={16} />}
-            onClick={() => {
-              accountForm.resetFields();
-              setAccountModalOpen(true);
-            }}
-            block
-            className={`${styles.authBtn} ${
-              collapsed ? styles.authBtnCollapsed : ""
-            }`}
-          >
-            {!collapsed && t("account.title")}
-          </Button>
+          {hubMode ? (
+            <Button
+              type="text"
+              icon={<SparkSearchUserLine size={16} />}
+              onClick={() => {
+                accountForm.resetFields();
+                setAccountModalOpen(true);
+              }}
+              block
+              className={`${styles.authBtn} ${
+                collapsed ? styles.authBtnCollapsed : ""
+              }`}
+            >
+              {!collapsed && t("account.title")}
+            </Button>
+          ) : !isAgentAccount ? (
+            <Button
+              type="text"
+              icon={<SparkSearchUserLine size={16} />}
+              onClick={() => navigate("/accounts")}
+              block
+              className={`${styles.authBtn} ${
+                collapsed ? styles.authBtnCollapsed : ""
+              }`}
+            >
+              {!collapsed && t("account.title")}
+            </Button>
+          ) : (
+            <Button
+              type="text"
+              icon={<SparkSearchUserLine size={16} />}
+              onClick={() => navigate("/my-account")}
+              block
+              className={`${styles.authBtn} ${
+                collapsed ? styles.authBtnCollapsed : ""
+              }`}
+            >
+              {!collapsed && t("account.myAccount")}
+            </Button>
+          )}
           <Button
             type="text"
             icon={<SparkExitFullscreenLine size={16} />}

@@ -4,6 +4,7 @@ import type { TFunction } from "i18next";
 import api from "../../../api";
 import type { InboxEvent } from "../../../api/modules/console";
 import { useAgentStore } from "../../../stores/agentStore";
+import { useAuthStore } from "../../../stores/authStore";
 import {
   DEFAULT_AGENT_ID,
   getAgentDisplayName,
@@ -223,6 +224,7 @@ const mapEventToPushMessage = (
 export const useInboxData = () => {
   const { t } = useTranslation();
   const agents = useAgentStore((state) => state.agents);
+  const boundAgentId = useAuthStore((state) => state.boundAgentId());
   const agentsById = useMemo(
     () => new Map(agents.map((agent) => [agent.id, agent])),
     [agents],
@@ -263,6 +265,7 @@ export const useInboxData = () => {
       const res = await api.getInboxEvents({
         limit: INBOX_EVENT_QUERY_LIMIT,
         source_types: [...PUSH_MESSAGE_SOURCES],
+        ...(boundAgentId ? { agent_id: boundAgentId } : {}),
       });
       const events = [...(res?.events || [])].filter(
         (event) =>
@@ -287,7 +290,7 @@ export const useInboxData = () => {
     } catch (error) {
       console.error("Failed to fetch push inbox data", error);
     }
-  }, []);
+  }, [boundAgentId]);
 
   useEffect(() => {
     void loadPushMessages();

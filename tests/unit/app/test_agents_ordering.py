@@ -69,6 +69,12 @@ def test_agent_profile_flags_survive_config_round_trip(tmp_path):
     assert loaded.agents.profiles["disabled"].pinned is True
 
 
+def _admin_request() -> SimpleNamespace:
+    return SimpleNamespace(
+        state=SimpleNamespace(auth_role="admin", auth_agent_id=None),
+    )
+
+
 @pytest.mark.asyncio
 async def test_list_agents_uses_persisted_order(monkeypatch):
     """List response should follow stored agent order."""
@@ -84,7 +90,7 @@ async def test_list_agents_uses_persisted_order(monkeypatch):
         _agent_config,
     )
 
-    response = await agents_router.list_agents()
+    response = await agents_router.list_agents(_admin_request())
 
     assert [agent.id for agent in response.agents] == [
         "default",
@@ -108,7 +114,7 @@ async def test_list_agents_appends_missing_ids(monkeypatch):
         _agent_config,
     )
 
-    response = await agents_router.list_agents()
+    response = await agents_router.list_agents(_admin_request())
 
     assert [agent.id for agent in response.agents] == [
         "default",
@@ -227,6 +233,7 @@ async def test_reorder_agents_rejects_incomplete_payload(monkeypatch):
 
     with pytest.raises(HTTPException) as exc_info:
         await agents_router.reorder_agents(
+            _admin_request(),
             agents_router.ReorderAgentsRequest(agent_ids=["alpha", "default"]),
         )
 
@@ -251,6 +258,7 @@ async def test_reorder_agents_persists_valid_order(monkeypatch):
     monkeypatch.setattr(agents_router, "mutate_config", fake_mutate)
 
     response = await agents_router.reorder_agents(
+        _admin_request(),
         agents_router.ReorderAgentsRequest(
             agent_ids=["default", "beta", "alpha"],
         ),
@@ -329,6 +337,7 @@ async def test_create_agent_appends_new_id_to_order(monkeypatch, tmp_path):
     )
 
     await agents_router.create_agent(
+        _admin_request(),
         agents_router.CreateAgentRequest(
             name="Beta",
             workspace_dir=str(tmp_path / "beta"),
@@ -372,7 +381,10 @@ async def test_delete_agent_removes_id_from_order(monkeypatch):
 
     await agents_router.delete_agent(
         "beta",
-        request=SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
+        request=SimpleNamespace(
+            state=SimpleNamespace(auth_role="admin", auth_agent_id=None),
+            app=SimpleNamespace(state=SimpleNamespace()),
+        ),
     )
 
     assert config.agents.agent_order == ["alpha", "default"]

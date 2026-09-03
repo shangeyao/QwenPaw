@@ -23,6 +23,12 @@ interface PoolSkillCardProps {
   onBroadcast: (skill: PoolSkillSpec) => void;
   onDelete: (skill: PoolSkillSpec) => void;
   onAutomationQuickAction: (skill: PoolSkillSpec) => void | Promise<void>;
+  canDelete?: boolean;
+  onToggleAutoUpdate: (
+    skill: PoolSkillSpec,
+    enabled: boolean,
+    targets?: string[] | null,
+  ) => void | Promise<void>;
 }
 
 export function PoolSkillCard({
@@ -35,6 +41,8 @@ export function PoolSkillCard({
   onBroadcast,
   onDelete,
   onAutomationQuickAction,
+  canDelete = true,
+  onToggleAutoUpdate,
 }: PoolSkillCardProps) {
   const { t } = useTranslation();
   const [isHover, setIsHover] = useState(false);
@@ -215,17 +223,19 @@ export function PoolSkillCard({
           >
             {t("skillPool.broadcast")}
           </Button>
-          <Button
-            danger
-            className={styles.deleteButton}
-            disabled={batchModeEnabled}
-            onClick={(e) => {
-              e.stopPropagation();
-              void onDelete(skill);
-            }}
-          >
-            {t("skillPool.delete")}
-          </Button>
+          {canDelete && (
+            <Button
+              danger
+              className={styles.deleteButton}
+              disabled={batchModeEnabled}
+              onClick={(e) => {
+                e.stopPropagation();
+                void onDelete(skill);
+              }}
+            >
+              {t("skillPool.delete")}
+            </Button>
+          )}
         </div>
       )}
     </Card>

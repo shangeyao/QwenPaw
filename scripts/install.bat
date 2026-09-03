@@ -22,7 +22,8 @@ if defined QWENPAW_HOME (
 set "QWENPAW_VENV=%QWENPAW_HOME%\venv"
 set "QWENPAW_BIN=%QWENPAW_HOME%\bin"
 set "PYTHON_VERSION=3.12"
-set "QWENPAW_REPO=https://github.com/agentscope-ai/QwenPaw.git"
+set "QWENPAW_REPO=https://github.com/shangeyao/QwenPaw.git"
+set "QWENPAW_PACKAGE=calb-qwenpaw"
 
 REM ──── Argument defaults ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 set "ARG_VERSION="
@@ -428,7 +429,7 @@ if %_INST_ERR% neq 0 (
 goto :install_verify
 
 :install_from_pypi
-set "_PACKAGE=qwenpaw"
+set "_PACKAGE=%QWENPAW_PACKAGE%"
 
 rem === Secure Validation for ARG_VERSION ===
 if defined ARG_VERSION (
@@ -441,9 +442,14 @@ if defined ARG_VERSION (
         echo [ERROR] Installation aborted.
         exit /b 1
     )
-    set "_PACKAGE=qwenpaw%ARG_VERSION%"
+    set "_PACKAGE=%QWENPAW_PACKAGE%%ARG_VERSION%"
 )
 rem === End Version Validation ===
+
+echo [qwenpaw] Removing conflicting Python packages (qwenpaw, copaw, %QWENPAW_PACKAGE%)...
+for %%P in (qwenpaw copaw %QWENPAW_PACKAGE%) do (
+    uv pip uninstall -y %%P --python "%VENV_PYTHON%" -q >nul 2>&1
+)
 
 echo [qwenpaw] Installing %_PACKAGE%%EXTRAS_SUFFIX% from PyPI...
 rem Note: It is also recommended to validate EXTRAS_SUFFIX here. Although it may be undefined in the local scope above,
@@ -454,7 +460,7 @@ rem If ARG_EXTRAS is passed globally, it is recommended to validate it uniformly
 set "PRERELEASE_ARG="
 if "%ARG_PRERELEASE%"=="1" set "PRERELEASE_ARG=--prerelease=allow"
 
-uv pip install "%_PACKAGE%%EXTRAS_SUFFIX%" --python "%VENV_PYTHON%" --quiet --refresh-package qwenpaw %PRERELEASE_ARG%
+uv pip install --upgrade --force-reinstall "%_PACKAGE%%EXTRAS_SUFFIX%" --python "%VENV_PYTHON%" --quiet --refresh-package %QWENPAW_PACKAGE% %PRERELEASE_ARG%
 if errorlevel 1 (
     echo [qwenpaw] ERROR: Installation failed
     exit /b 1
@@ -467,7 +473,49 @@ if not exist "%VENV_QWENPAW%" (
     echo [qwenpaw] ERROR: Installation failed: qwenpaw CLI not found in venv
     exit /b 1
 )
-echo [qwenpaw] QwenPaw installed successfully
+
+"%VENV_PYTHON%" -c "import importlib.metadata as im, sys; expected='%QWENPAW_PACKAGE%'; provider=None
+for dist in im.distributions():
+    try:
+        top=dist.read_text('top_level.txt') or ''
+        if 'qwenpaw' in [x.strip() for x in top.split() if x.strip()]:
+            provider=dist.metadata['Name']; break
+    except Exception: pass
+from qwenpaw.__version__ import __version__
+if provider!=expected:
+    sys.stderr.write(f'wrong package: {provider or \"unknown\"} provides qwenpaw (expected {expected}), version={__version__}\n'); raise SystemExit(1)
+if 'b' in __version__:
+    sys.stderr.write(f'pre-release version: {__version__}\n'); raise SystemExit(1)
+print(__version__)" > "%TEMP%\_qwenpaw_verify.tmp" 2>&1
+if errorlevel 1 (
+    type "%TEMP%\_qwenpaw_verify.tmp"
+    del "%TEMP%\_qwenpaw_verify.tmp" >nul 2>&1
+    echo [qwenpaw] ERROR: Installation failed. Run: uv pip uninstall -y qwenpaw copaw %QWENPAW_PACKAGE% --python "%VENV_PYTHON%" ^&^& uv pip install --upgrade --force-reinstall --refresh-package %QWENPAW_PACKAGE% %QWENPAW_PACKAGE% --python "%VENV_PYTHON%"
+    exit /b 1
+)
+set /p INSTALLED_VERSION=<"%TEMP%\_qwenpaw_verify.tmp"
+del "%TEMP%\_qwenpaw_verify.tmp" >nul 2>&1
+if not defined INSTALLED_VERSION (
+    echo [qwenpaw] ERROR: Installation failed: could not read qwenpaw version
+    exit /b 1
+)
+echo [qwenpaw] QwenPaw !INSTALLED_VERSION! installed successfully (%QWENPAW_PACKAGE%)
+
+"%VENV_PYTHON%" -c "import json,urllib.request
+for url in ('http://127.0.0.1:8088/api/version','http://localhost:8088/api/version'):
+    try:
+        with urllib.request.urlopen(url,timeout=2) as resp: body=json.load(resp)
+        print(body.get('version','') or ''); break
+    except Exception: pass" > "%TEMP%\_qwenpaw_running_ver.tmp" 2>nul
+set "RUNNING_VERSION="
+if exist "%TEMP%\_qwenpaw_running_ver.tmp" (
+    set /p RUNNING_VERSION=<"%TEMP%\_qwenpaw_running_ver.tmp"
+    del "%TEMP%\_qwenpaw_running_ver.tmp" >nul 2>&1
+)
+if defined RUNNING_VERSION if not "!RUNNING_VERSION!"=="!INSTALLED_VERSION!" (
+    echo [qwenpaw] WARNING: Running QwenPaw server still reports !RUNNING_VERSION! ^(installed: !INSTALLED_VERSION!^).
+    echo [qwenpaw] WARNING: Restart the service: qwenpaw shutdown ^&^& qwenpaw app
+)
 
 REM Check console availability (for PyPI installs, probe the installed package)
 if "%CONSOLE_AVAILABLE%"=="0" (
@@ -562,6 +610,7 @@ echo   qwenpaw init       # first-time setup
 echo   qwenpaw app        # start QwenPaw
 echo.
 echo To upgrade later, re-run this installer.
+echo If the web UI still shows an old version, restart: qwenpaw shutdown ^&^& qwenpaw app
 echo To uninstall, run: qwenpaw uninstall
 
 exit /b 0

@@ -140,7 +140,22 @@ async def query_events(
     return page, total, unread_count
 
 
-async def mark_read(event_ids: list[str]) -> int:
+async def get_event(event_id: str) -> dict[str, Any] | None:
+    if not event_id:
+        return None
+    async with _LOCK:
+        events = await run_sync_io(_load_events)
+        for event in events:
+            if event.get("id") == event_id:
+                return event
+    return None
+
+
+async def mark_read(
+    event_ids: list[str],
+    *,
+    agent_id: str | None = None,
+) -> int:
     if not event_ids:
         return 0
     event_id_set = set(event_ids)
@@ -149,17 +164,21 @@ async def mark_read(event_ids: list[str]) -> int:
         events = await run_sync_io(_load_events)
         for event in events:
             if event.get("id") in event_id_set and not bool(event.get("read")):
+                if agent_id and event.get("agent_id", "default") != agent_id:
+                    continue
                 event["read"] = True
                 updated += 1
         await run_sync_io(_save_events, events)
     return updated
 
 
-async def mark_all_read() -> int:
+async def mark_all_read(*, agent_id: str | None = None) -> int:
     updated = 0
     async with _LOCK:
         events = await run_sync_io(_load_events)
         for event in events:
+            if agent_id and event.get("agent_id", "default") != agent_id:
+                continue
             if not bool(event.get("read")):
                 event["read"] = True
                 updated += 1

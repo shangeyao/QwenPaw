@@ -1,7 +1,7 @@
 [project]
-name = "qwenpaw"
+name = "calb-qwenpaw"
 dynamic = ["version"]
-description = "QwenPaw is a **personal assistant** that runs in your own environment. It talks to you over multiple channels (DingTalk, Feishu, QQ, Discord, iMessage, etc.) and runs scheduled tasks according to your configuration. **What it can do is driven by Skills — the possibilities are open-ended.** Built-in skills include cron, PDF/Office handling, news digest, file reading, and more; you can add custom skills. All data and tasks run on your machine; no third-party hosting."
+description = "QwenPaw fork by CALB (https://github.com/shangeyao/QwenPaw) with default web auth and per-agent accounts. Install: pip install calb-qwenpaw, run: qwenpaw app"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -77,10 +77,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://qwenpaw.agentscope.io/"
-Repository = "https://github.com/agentscope-ai/QwenPaw"
-Documentation = "https://qwenpaw.agentscope.io/docs/"
-Issues = "https://github.com/agentscope-ai/QwenPaw/issues"
+Homepage = "https://github.com/shangeyao/QwenPaw"
+Repository = "https://github.com/shangeyao/QwenPaw"
+Documentation = "https://github.com/shangeyao/QwenPaw#readme"
+Issues = "https://github.com/shangeyao/QwenPaw/issues"
 
 [tool.setuptools.dynamic]
 version = {attr = "qwenpaw.__version__.__version__"}
@@ -162,7 +162,7 @@ qwenpaw-data = [
     "qwenpaw-data-skills>=0.1,<0.2",
 ]
 full = [
-    "qwenpaw[qwenpaw-data,hub,local,whisper,codex,qoder]",
+    "calb-qwenpaw[qwenpaw-data,hub,local,whisper,codex,qoder]",
 ]
 sip = [
     "pyVoIP>=1.6.0",
@@ -171,7 +171,7 @@ sip = [
     "audioop-lts; python_version >= '3.13'",
 ]
 sip-livekit = [
-    "qwenpaw[sip]",
+    "calb-qwenpaw[sip]",
     "livekit>=1.0.0",
     "livekit-api>=0.6.0",
 ]

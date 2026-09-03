@@ -141,7 +141,7 @@ try:
     import lark_oapi.ws.client as _ws_mod
 
     _ws_mod.loop = _EventLoopProxy()
-except ImportError:  # pragma: no cover - optional dependency may be missing
+except Exception:  # pragma: no cover - optional dependency may be missing
     lark = None  # type: ignore[assignment]
     GetUserRequest = None  # type: ignore[assignment]
     CreateFileRequest = None  # type: ignore[assignment]

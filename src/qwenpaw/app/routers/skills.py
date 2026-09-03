@@ -65,6 +65,7 @@ from ...agents.skill_system.store import (
 from ...security.skill_scanner import SkillScanError
 from ..inbox_store import append_event as append_inbox_event
 from ..utils import check_upload_size, schedule_agent_reload
+from ..auth_scope import require_admin
 
 logger = logging.getLogger(__name__)
 
@@ -1507,7 +1508,11 @@ async def get_pool_skill(skill_name: str) -> PoolSkillDetail:
 
 
 @router.delete("/pool/{skill_name}")
-async def delete_pool_skill(skill_name: str) -> dict[str, Any]:
+async def delete_pool_skill(
+    request: Request,
+    skill_name: str,
+) -> dict[str, Any]:
+    require_admin(request)
     deleted = SkillPoolService().delete_skill(skill_name)
     if not deleted:
         raise HTTPException(
@@ -1545,7 +1550,11 @@ async def update_pool_skill_config(
 
 
 @router.delete("/pool/{skill_name}/config")
-async def delete_pool_skill_config(skill_name: str) -> dict[str, Any]:
+async def delete_pool_skill_config(
+    request: Request,
+    skill_name: str,
+) -> dict[str, Any]:
+    require_admin(request)
     def _update(payload: dict[str, Any]) -> bool:
         entry = payload.get("skills", {}).get(skill_name)
         if entry is None:
@@ -1703,9 +1712,11 @@ async def batch_delete_skills(
 
 @router.post("/pool/batch-delete")
 async def batch_delete_pool_skills(
+    request: Request,
     skills: list[str],
 ) -> dict[str, Any]:
     """Delete multiple pool skills. Per-skill results."""
+    require_admin(request)
     service = SkillPoolService()
     results: dict[str, Any] = {}
     for skill_name in skills:

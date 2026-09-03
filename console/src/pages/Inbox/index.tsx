@@ -42,6 +42,8 @@ import { useInboxData } from "./hooks/useInboxData";
 import { useTraceViewer } from "./hooks/useTraceViewer";
 import type { PushMessage } from "./types";
 import { useAgentStore } from "../../stores/agentStore";
+import { useAuthStore } from "../../stores/authStore";
+import { belongsToBoundAgent } from "../../utils/authScope";
 import {
   DEFAULT_AGENT_ID,
   getAgentDisplayName,
@@ -170,6 +172,8 @@ export default function InboxPage() {
   const [batchMode, setBatchMode] = useState(false);
   const agents = useAgentStore((state) => state.agents);
   const [wobbleEnabled, toggleWobble] = useInboxWobble();
+  const boundAgentId = useAuthStore((state) => state.boundAgentId());
+  const isAgentAccount = useAuthStore((state) => state.isAgentAccount());
   const { approvals: pendingApprovals, setApprovals } = useApprovalContext();
   const {
     summary,
@@ -183,6 +187,18 @@ export default function InboxPage() {
     () =>
       new Map(agents.map((agent) => [agent.id, getAgentDisplayName(agent, t)])),
     [agents, t],
+  );
+  const scopedPendingApprovals = useMemo(
+    () =>
+      boundAgentId
+        ? pendingApprovals.filter((approval) =>
+            belongsToBoundAgent(
+              approval.owner_agent_id || approval.agent_id,
+              boundAgentId,
+            ),
+          )
+        : pendingApprovals,
+    [boundAgentId, pendingApprovals],
   );
   const filteredPushMessages = useMemo(() => {
     return pushMessages.filter((message) => {
@@ -234,7 +250,7 @@ export default function InboxPage() {
         label: t(SOURCE_TYPE_LABEL_KEYS[type] || type),
       }));
   }, [pushMessages, t]);
-  const approvalCount = pendingApprovals.length;
+  const approvalCount = scopedPendingApprovals.length;
   const pagedPushMessages = useMemo(() => {
     const start = (messagesPage - 1) * PUSH_MESSAGES_PAGE_SIZE;
     return filteredPushMessages.slice(start, start + PUSH_MESSAGES_PAGE_SIZE);
@@ -406,15 +422,17 @@ export default function InboxPage() {
         <div className={styles.tabContent}>
           <div className={styles.messagesToolbar}>
             <div className={styles.messagesSelectionTools}>
-              <Select
-                size="middle"
-                value={selectedAgentFilter}
-                onChange={(value) => setSelectedAgentFilter(value)}
-                allowClear
-                options={pushMessageAgentOptions}
-                style={{ width: 180 }}
-                placeholder={t("inbox.filterByAgent")}
-              />
+              {!isAgentAccount && (
+                <Select
+                  size="middle"
+                  value={selectedAgentFilter}
+                  onChange={(value) => setSelectedAgentFilter(value)}
+                  allowClear
+                  options={pushMessageAgentOptions}
+                  style={{ width: 180 }}
+                  placeholder={t("inbox.filterByAgent")}
+                />
+              )}
               <Select
                 size="middle"
                 value={selectedSourceTypeFilter}
@@ -522,9 +540,9 @@ export default function InboxPage() {
       ),
       children: (
         <div className={styles.tabContent}>
-          {pendingApprovals.length > 0 ? (
+          {scopedPendingApprovals.length > 0 ? (
             <div className={styles.cardList}>
-              {pendingApprovals.map((approval) => (
+              {scopedPendingApprovals.map((approval) => (
                 <GlobalApprovalCard
                   key={approval.request_id}
                   requestId={approval.request_id}
